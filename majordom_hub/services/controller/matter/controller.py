@@ -6,8 +6,10 @@ from chip.clusters.ClusterObjects import ClusterCommand
 from chip.clusters.Objects import Identify
 from uuid import UUID
 from matter_server.client import MatterClient
+from matter_server.common.models import CommissionableNodeData
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
+from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.device import Discovery, CredentialsValue, CredentialsType
@@ -49,6 +51,8 @@ class MatterController(AbstractController):
         await self.__matter_client.set_wifi_credentials(self.__matter_wifi_ssid, self.__matter_wifi_secret)
         await self.__matter_client.set_thread_operational_dataset(self.__matter_thread_dataset)
 
+        await asyncio.create_task(self.__matter_discovery_loop())
+
     async def stop(self):
         if not self.__matter_client_session or not self.__matter_client:
             return
@@ -57,10 +61,9 @@ class MatterController(AbstractController):
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
         device = await self.__matter_client.commision_with_code(credentials)
-        # if discovery.credentials in {CredentialsType.code, CredentialsType.qr} and credentials:
         self.__majordom_descoveries.pop(discovery.id)
         
-        device_id = self.__mapper.matter_id_to_uuid(device.node_id)
+        device_id = self.__mapper.matter_id_to_uuid(f"{device.device_info.productName}_{device.device_info.productID}")
         await self.dependencies.output.controller_did_connect_device(self, device_id)
 
     async def unpair(self, device: MDevice):
@@ -117,4 +120,36 @@ class MatterController(AbstractController):
                 await self.__matter_client.write_attribute(node.node_id, attribute_path, command.value)
         
         await self.dependencies.output.controller_did_receive_device_events(self, [])
-    # Discovery?
+
+    async def __matter_discovery_loop(self, interval: int = 30):
+        while True:
+            try:
+                nodes: list[CommissionableNodeData] = await self.__matter_client.discover_commissionable_nodes()
+                for node in nodes:
+                    await self.__async_matter_did_discover(node)
+            except Exception as e:
+                print(f"[{self.name}] discovery error: {e}")
+            await asyncio.sleep(interval)
+
+    async def __async_matter_did_discover(self, node: CommissionableNodeData):
+        discovery_id = self.__mapper.matter_id_to_uuid(node.instance_name or node.device_name or "unknown")
+
+        if discovery_id in self.__majordom_descoveries:
+            print(f'{self.name} Discovered known device: {node.device_name or node.instance_name}')
+            return
+
+        mj_discovery_info = Discovery(
+            id=discovery_id,
+            integration = NonEmptyStr(self.name),
+            credentials = CredentialsType.code.with_mask("DDDDDDDDDDDDDDD"),
+            expiration = None,
+            transport = NonEmptyStr("IP" if node.addresses else "BLE"),
+            device_name = NonEmptyStr(node.device_name or node.instance_name or "Unknown"),
+            device_manufacturer = f"Vendor {node.vendor_id}" if node.vendor_id else None,
+            device_category = node.device_type,
+            device_icon = None,
+        )
+
+        self.__majordom_descoveries[discovery_id] = mj_discovery_info
+
+        await self.dependencies.output.controller_did_receive_discovery(self, mj_discovery_info)

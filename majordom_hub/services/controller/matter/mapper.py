@@ -8,7 +8,7 @@ from typing import Any
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType
 
-from .model import MParameter, MParameterTypeEnum, MParameterIntegrationData
+from .model import MatterParameter, MatterParameterTypeEnum, MatterParameterIntegrationData
 
 
 class MatterMapper():
@@ -42,7 +42,7 @@ class MatterMapper():
         return ParameterDataType.none
 
 
-    def parse_matter_node_paramters_to_commands_and_attributes(self, node: MatterNode) -> list[MParameter]:
+    def parse_matter_node_paramters_to_commands_and_attributes(self, node: MatterNode) -> list[MatterParameter]:
         params: list = []
 
         for endpoint_id, endpoint in node.endpoints.items():
@@ -52,17 +52,17 @@ class MatterMapper():
                         if not issubclass(cmd_cls, ClusterCommand):
                             continue
                         cmd_id = getattr(cmd_cls, "command_id", -1)
-                        params.append(MParameter(
+                        params.append(MatterParameter(
                             id=self.matter_id_to_uuid(f"{endpoint_id}/{cluster_id}/{cmd_id}"),
                             name=name,
                             data_type=ParameterDataType.none,
                             role=ParameterRole.event,
-                            integration_data=MParameterIntegrationData(
+                            integration_data=MatterParameterIntegrationData(
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
                                 command_id=cmd_id,
                             ),
-                            type=MParameterTypeEnum.command,
+                            type=MatterParameterTypeEnum.command,
                         ))
                 
                 if hasattr(cluster, "Attributes"):
@@ -71,17 +71,17 @@ class MatterMapper():
                             continue
                         attr_id = getattr(attr_cls, "attribute_id", -1)
                         value = node.get_attribute_value(endpoint_id, cluster_id, attr_id)
-                        params.append(MParameter(
+                        params.append(MatterParameter(
                             id=self.matter_id_to_uuid(f"{endpoint_id}/{cluster_id}/{attr_id}"),
                             name=name,
                             data_type=self.get_parameter_data_type(value),
                             role=ParameterRole.event,
-                            integration_data=MParameterIntegrationData(
+                            integration_data=MatterParameterIntegrationData(
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
                                 attribute_id=attr_id,
                                 value=value
                             ),
-                            type=MParameterTypeEnum.attribute,
+                            type=MatterParameterTypeEnum.attribute,
                         ))
         return params

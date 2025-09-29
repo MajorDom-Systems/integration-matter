@@ -6,17 +6,17 @@ from majordom_hub.schemas.device import Device, Parameter
 
 
 
-class MParameterTypeEnum(str, Enum):
+class MatterParameterTypeEnum(str, Enum):
     attribute = "attribute"
     command = "command"
 
 
-class MDeviceIntegrationData(BaseModel):
+class MatterDeviceIntegrationData(BaseModel):
     node_id: int
     identify_endpoint_id: int
 
 
-class MParameterIntegrationData(BaseModel):
+class MatterParameterIntegrationData(BaseModel):
     endpoint_id: int
     cluster_id: int
     is_client: bool = False
@@ -25,10 +25,10 @@ class MParameterIntegrationData(BaseModel):
     value: Any | None = None
 
 
-class MDevice(Device):
+class MatterDevice(Device):
     integration_data: MDeviceIntegrationData
 
 
-class MParameter(Parameter):
+class MatterParameter(Parameter):
     integration_data: MParameterIntegrationData
     type: MParameterTypeEnum  # "command" or "attribute"

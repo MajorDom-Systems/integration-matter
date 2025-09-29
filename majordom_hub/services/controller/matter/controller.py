@@ -16,7 +16,7 @@ from majordom_hub.schemas.device import Discovery, CredentialsValue, Credentials
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 
-from .model import MDevice, MParameter, MParameterTypeEnum
+from .model import MatterDevice, MatterParameter, MatterParameterTypeEnum
 from .mapper import MatterMapper
 
 
@@ -66,17 +66,17 @@ class MatterController(AbstractController):
         device_id = self.__mapper.matter_id_to_uuid(f"{device.device_info.productName}_{device.device_info.productID}")
         await self.dependencies.output.controller_did_connect_device(self, device_id)
 
-    async def unpair(self, device: MDevice):
+    async def unpair(self, device: MatterDevice):
         await self.__matter_client.remove_node(device.integration_data.node_id)
 
-    async def identify(self, device: MDevice):
+    async def identify(self, device: MatterDevice):
         command = Identify.Commands.Identify()
         node = self.__matter_client.get_node(device.integration_data.node_id)
         for endpoint_id in node.endpoints.keys():
             if node.has_cluster(3, endpoint_id):  # 3 is Identify cluster id
                 await self.__matter_client.send_device_command(device.integration_data.node_id, endpoint_id, command)
 
-    async def fetch(self, device: MDevice):
+    async def fetch(self, device: MatterDevice):
         if not (node := self.__matter_client.get_node(device.integration_data.node_id)):
             raise RuntimeError("Error this device is not found")        
         parameters = self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(node)
@@ -91,7 +91,7 @@ class MatterController(AbstractController):
             )
         await self.dependencies.output.controller_did_receive_device_events(self, events)
 
-    async def send_command(self, command: DeviceCommand, device: MDevice, parameter: MParameter):
+    async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
         if not self.__matter_client.get_node(device.integration_data.node_id):
             raise RuntimeError("Error this device is not found")
         node = self.__matter_client.get_node(device.integration_data.node_id)
@@ -103,7 +103,7 @@ class MatterController(AbstractController):
         if not (cluster := endpoint.clusters[cluster_id]):
             raise ValueError("Cluster dosent exist")
 
-        if parameter.type is MParameterTypeEnum.command:
+        if parameter.type is MatterParameterTypeEnum.command:
             if parameter.integration_data.command_id is None or parameter.integration_data.command_id < 0:
                 raise ValueError("Error")
             if hasattr(cluster, "Commands"):
@@ -114,7 +114,7 @@ class MatterController(AbstractController):
                     if cmd_id == parameter.integration_data.command_id:
                         await self.__matter_client.send_device_command(node.node_id, endpoint_id, cluster_id, cmd_cls())
         
-        if parameter.type is MParameterTypeEnum.attribute:
+        if parameter.type is MatterParameterTypeEnum.attribute:
             attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
             if attribute_path in node.node_data.attributes.keys():
                 await self.__matter_client.write_attribute(node.node_id, attribute_path, command.value)

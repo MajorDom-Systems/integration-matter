@@ -31,5 +31,4 @@ class MDevice(Device):
 
 class MParameter(Parameter):
     integration_data: MParameterIntegrationData
-    display_name: str
     type: MParameterTypeEnum  # "command" or "attribute"

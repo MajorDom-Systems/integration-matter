@@ -62,7 +62,6 @@ class MatterMapper():
                                 cluster_id=cluster_id,
                                 command_id=cmd_id,
                             ),
-                            display_name=name,  # Do you need a display name?
                             type=MParameterTypeEnum.command,
                         ))
                 
@@ -83,7 +82,6 @@ class MatterMapper():
                                 attribute_id=attr_id,
                                 value=value
                             ),
-                            display_name=name,
                             type=MParameterTypeEnum.attribute,
                         ))
         return params

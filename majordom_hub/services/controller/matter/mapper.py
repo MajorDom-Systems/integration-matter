@@ -1,7 +1,7 @@
 import inspect
 
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
-from matter_server.client import MatterNode
+from matter_server.client import MatterClient, MatterNode
 from uuid import NAMESPACE_DNS, UUID, uuid5
 from typing import Any
 
@@ -41,7 +41,7 @@ class MatterMapper():
             return ParameterDataType.data
         return ParameterDataType.none
 
-    async def parse_matter_node_paramters_to_commands_and_attributes(self, node: MatterNode) -> list[MatterParameter]:
+    async def parse_matter_node_paramters_to_commands_and_attributes(self, matter_client: MatterClient, node: MatterNode) -> list[MatterParameter]:
         params: list = []
 
         for endpoint_id, endpoint in node.endpoints.items():
@@ -69,12 +69,32 @@ class MatterMapper():
                         if not issubclass(attr_cls, ClusterAttributeDescriptor):
                             continue
                         attr_id = getattr(attr_cls, "attribute_id", -1)
-                        value = node.get_attribute_value(endpoint_id, cluster_id, attr_id)
+                        value = None
+                        try:
+                            value = node.get_attribute_value(endpoint_id, cluster_id, attr_id)
+                            can_read = True
+                        except Exception:
+                            can_read = False
+                        try:
+                            await matter_client.write_attribute(
+                                node.node_id,
+                                f"{endpoint_id}/{cluster_id}/{attr_id}",
+                                value
+                            )
+                            can_write = True
+                        except Exception:
+                            can_write = False
+                        if can_read and can_write:
+                            role = ParameterRole.control
+                        elif can_read:
+                            role = ParameterRole.sensor
+                        else:
+                            role = ParameterRole.event
                         params.append(MatterParameter(
                             id=self.matter_id_to_uuid(f"{endpoint_id}/{cluster_id}/{attr_id}"),
                             name=name,
                             data_type=self.get_parameter_data_type(value),
-                            role=ParameterRole.event,
+                            role=role,
                             integration_data=MatterParameterIntegrationData(
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,

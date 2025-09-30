@@ -79,7 +79,7 @@ class MatterController(AbstractController):
     async def fetch(self, device: MatterDevice):
         if not (node := self.__matter_client.get_node(device.integration_data.node_id)):
             raise RuntimeError("Error this device is not found")        
-        parameters = self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(self.__matter_client, node)
+        parameters = await self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(self.__matter_client, node)
         events: list[DeviceParameterChangedEvent] = []
         for parameter in parameters:
             events.append(

@@ -79,14 +79,14 @@ class MatterController(AbstractController):
     async def fetch(self, device: MatterDevice):
         if not (node := self.__matter_client.get_node(device.integration_data.node_id)):
             raise RuntimeError("Error this device is not found")        
-        parameters = self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(node)
+        parameters = self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(self.__matter_client, node)
         events: list[DeviceParameterChangedEvent] = []
         for parameter in parameters:
             events.append(
                 DeviceParameterChangedEvent(
                     device_id=device.id,
                     parameter_id=parameter.id,
-                    value=parameter.integration_data.value,
+                    value=None, # ?
                 )
             )
         await self.dependencies.output.controller_did_receive_device_events(self, events)
@@ -103,7 +103,7 @@ class MatterController(AbstractController):
         if not (cluster := endpoint.clusters[cluster_id]):
             raise ValueError("Cluster dosent exist")
 
-        if parameter.type is MatterParameterTypeEnum.command:
+        if parameter.integration_data.type is MatterParameterTypeEnum.command:
             if parameter.integration_data.command_id is None or parameter.integration_data.command_id < 0:
                 raise ValueError("Error")
             if hasattr(cluster, "Commands"):
@@ -114,7 +114,7 @@ class MatterController(AbstractController):
                     if cmd_id == parameter.integration_data.command_id:
                         await self.__matter_client.send_device_command(node.node_id, endpoint_id, cluster_id, cmd_cls())
         
-        if parameter.type is MatterParameterTypeEnum.attribute:
+        if parameter.integration_data.type is MatterParameterTypeEnum.attribute:
             attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
             if attribute_path in node.node_data.attributes.keys():
                 await self.__matter_client.write_attribute(node.node_id, attribute_path, command.value)

@@ -22,13 +22,12 @@ class MatterParameterIntegrationData(BaseModel):
     is_client: bool = False
     command_id: int | None = None
     attribute_id: int | None = None
-    value: Any | None = None
+    type: MatterParameterTypeEnum  # "command" or "attribute"
 
 
 class MatterDevice(Device):
-    integration_data: MDeviceIntegrationData
+    integration_data: MatterDeviceIntegrationData
 
 
 class MatterParameter(Parameter):
-    integration_data: MParameterIntegrationData
-    type: MParameterTypeEnum  # "command" or "attribute"
+    integration_data: MatterParameterIntegrationData

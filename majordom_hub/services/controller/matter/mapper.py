@@ -41,8 +41,7 @@ class MatterMapper():
             return ParameterDataType.data
         return ParameterDataType.none
 
-
-    def parse_matter_node_paramters_to_commands_and_attributes(self, node: MatterNode) -> list[MatterParameter]:
+    async def parse_matter_node_paramters_to_commands_and_attributes(self, node: MatterNode) -> list[MatterParameter]:
         params: list = []
 
         for endpoint_id, endpoint in node.endpoints.items():
@@ -61,8 +60,8 @@ class MatterMapper():
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
                                 command_id=cmd_id,
+                                type=MatterParameterTypeEnum.command,
                             ),
-                            type=MatterParameterTypeEnum.command,
                         ))
                 
                 if hasattr(cluster, "Attributes"):
@@ -80,8 +79,7 @@ class MatterMapper():
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
                                 attribute_id=attr_id,
-                                value=value
+                                type=MatterParameterTypeEnum.attribute,
                             ),
-                            type=MatterParameterTypeEnum.attribute,
                         ))
         return params

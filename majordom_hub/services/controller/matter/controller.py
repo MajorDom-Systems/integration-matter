@@ -82,11 +82,18 @@ class MatterController(AbstractController):
         parameters = await self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(self.__matter_client, node)
         events: list[DeviceParameterChangedEvent] = []
         for parameter in parameters:
+            value = None
+            if parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+                value = node.get_attribute_value(
+                    parameter.integration_data.endpoint_id,
+                    parameter.integration_data.cluster_id,
+                    parameter.integration_data.attribute_id,
+                )
             events.append(
                 DeviceParameterChangedEvent(
                     device_id=device.id,
                     parameter_id=parameter.id,
-                    value=None, # ?
+                    value=value,
                 )
             )
         await self.dependencies.output.controller_did_receive_device_events(self, events)

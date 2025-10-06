@@ -24,6 +24,7 @@ class MatterController(AbstractController):
     __matter_client: MatterClient
     __matter_client_session: ClientSession
     __majordom_descoveries: dict[UUID, Discovery] = dict()
+    __connected_device: dict[UUID, UUID | None] = dict()
 
     __matter_wifi_ssid: str
     __matter_wifi_secret: str  # in set_wifi_credentials this named is credentials
@@ -64,9 +65,13 @@ class MatterController(AbstractController):
         self.__majordom_descoveries.pop(discovery.id)
         
         device_id = self.__mapper.matter_id_to_uuid(f"{device.device_info.productName}_{device.device_info.productID}")
+        self.__connected_device[discovery.id] = device_id
         await self.dependencies.output.controller_did_connect_device(self, device_id)
 
     async def unpair(self, device: MatterDevice):
+        for key, value in self.__connected_device.items():
+            if value is device.id:
+                self.__connected_device.pop(key)
         await self.__matter_client.remove_node(device.integration_data.node_id)
 
     async def identify(self, device: MatterDevice):
@@ -141,14 +146,18 @@ class MatterController(AbstractController):
     async def __async_matter_did_discover(self, node: CommissionableNodeData):
         discovery_id = self.__mapper.matter_id_to_uuid(node.instance_name or node.device_name or "unknown")
 
-        if discovery_id in self.__majordom_descoveries:
+        if discovery_id in self.__connected_device and self.__connected_device[discovery_id]:
             print(f'{self.name} Discovered known device: {node.device_name or node.instance_name}')
             return
 
         mj_discovery_info = Discovery(
             id=discovery_id,
             integration = NonEmptyStr(self.name),
-            credentials = CredentialsType.code.with_mask("DDDDDDDDDDDDDDD"),
+            credentials = self.__mapper.define_credentials_type(
+                node.commissioning_mode,
+                node.pairing_hint,
+                node.pairing_instruction
+            ),
             expiration = None,
             transport = NonEmptyStr("IP" if node.addresses else "BLE"),
             device_name = NonEmptyStr(node.device_name or node.instance_name or "Unknown"),
@@ -158,5 +167,6 @@ class MatterController(AbstractController):
         )
 
         self.__majordom_descoveries[discovery_id] = mj_discovery_info
+        self.__connected_device[discovery_id] = None
 
         await self.dependencies.output.controller_did_receive_discovery(self, mj_discovery_info)

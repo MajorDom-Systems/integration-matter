@@ -6,6 +6,7 @@ from uuid import NAMESPACE_DNS, UUID, uuid5
 from typing import Any
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
+from majordom_hub.schemas.device import CredentialsType
 from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType
 
 from .model import MatterParameter, MatterParameterTypeEnum, MatterParameterIntegrationData
@@ -25,6 +26,32 @@ class MatterMapper():
                 value=value,
             ))
         return parameter_changed_events
+    
+    def define_credentials_type(
+        self, commissioning_mode: int | None = None,
+        pairing_hint: int | None = None,
+        pairing_instruction: str | None = None,
+    ) -> CredentialsType:
+
+        if not commissioning_mode or commissioning_mode == 0:
+            return CredentialsType.none
+
+        hint = pairing_hint or 0
+        instruction = (pairing_instruction or "").lower()
+
+        if hint & 0x0004:
+            return CredentialsType.qr
+
+        if hint & 0x0002:
+            return CredentialsType.code.with_mask("DDD-DD-DDD")
+
+        if "code" in instruction or "pin" in instruction:  # If the instructions contain these words, it is most likely about this approach.
+            return CredentialsType.code.with_mask("DDD-DD-DDD")
+
+        if hint & (0x0001 | 0x0010):
+            return CredentialsType.none
+
+        return CredentialsType.none
 
     def get_parameter_data_type(self, value: Any) -> ParameterDataType:
         if value is None:

@@ -13,7 +13,7 @@ from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.command import DeviceCommand
-from majordom_hub.schemas.device import Discovery, CredentialsValue
+from majordom_hub.schemas.device import Discovery, CredentialsType, CredentialsValue
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 
@@ -65,7 +65,12 @@ class MatterController(AbstractController):
         await self.__matter_client_session.close()
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
-        commission_node = await self.__matter_client.commision_with_code(credentials)
+        if discovery.credentials is CredentialsType.qr:
+            commission_node = await self.__matter_client.comission_on_network(credentials)
+        elif discovery.credentials is CredentialsType.code:
+            commission_node = await self.__matter_client.commision_with_code(credentials)
+        else:
+            raise RuntimeError("This credentials type is not supported")
         self.__majordom_descoveries.pop(discovery.id)
         node = self.__matter_client.get_node(commission_node.node_id)
         device_id = self.__mapper.matter_id_to_uuid(f"{node.device_info.productName}_{node.device_info.productID}")

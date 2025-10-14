@@ -17,7 +17,7 @@ from majordom_hub.schemas.device import Discovery, CredentialsValue
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 
-from .model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameter, MatterParameterTypeEnum, MatterParameterState,
+from .model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameter, MatterParameterTypeEnum, MatterParameterState
 from .mapper import MatterMapper
 
 

@@ -2,21 +2,22 @@ import asyncio
 import inspect
 
 from aiohttp import ClientSession
-from chip.clusters.ClusterObjects import ClusterCommand
+from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import Identify
+from functools import partial
 from uuid import UUID
 from matter_server.client import MatterClient
-from matter_server.common.models import CommissionableNodeData
+from matter_server.common.models import CommissionableNodeData, EventType
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.command import DeviceCommand
-from majordom_hub.schemas.device import Discovery, CredentialsValue, CredentialsType
+from majordom_hub.schemas.device import Discovery, CredentialsValue
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 
-from .model import MatterDevice, MatterParameter, MatterParameterTypeEnum
+from .model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameter, MatterParameterTypeEnum, MatterParameterState,
 from .mapper import MatterMapper
 
 
@@ -25,6 +26,9 @@ class MatterController(AbstractController):
     __matter_client_session: ClientSession
     __majordom_descoveries: dict[UUID, Discovery] = dict()
     __connected_device: dict[UUID, UUID | None] = dict()
+    # discovery_id: device_id mapping.
+    # If the device is not connected, device_id is None.
+    # For removal, lookup is performed by device_id.
 
     __matter_wifi_ssid: str
     __matter_wifi_secret: str  # in set_wifi_credentials this named is credentials
@@ -61,10 +65,30 @@ class MatterController(AbstractController):
         await self.__matter_client_session.close()
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
-        device = await self.__matter_client.commision_with_code(credentials)
+        commission_node = await self.__matter_client.commision_with_code(credentials)
         self.__majordom_descoveries.pop(discovery.id)
-        
-        device_id = self.__mapper.matter_id_to_uuid(f"{device.device_info.productName}_{device.device_info.productID}")
+        node = self.__matter_client.get_node(commission_node.node_id)
+        device_id = self.__mapper.matter_id_to_uuid(f"{node.device_info.productName}_{node.device_info.productID}")
+        async with self.dependencies.make_device_repository() as device_repository:
+            device = await device_repository.state(device_id, MatterDeviceState)
+            if device and (not device.integration_data):
+                device.integration_data = MatterDeviceIntegrationData(node_id=node.node_id)
+            
+            parameters = await self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(self.__matter_client, node)
+            for parameter in parameters:
+                value=b''
+                if parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+                    value = node.get_attribute_value(
+                        parameter.integration_data.endpoint_id,
+                        parameter.integration_data.cluster_id,
+                        parameter.integration_data.attribute_id,
+                    )
+                device.parameters.append(MatterParameterState(
+                    **parameter.__dict__,
+                    value=value,
+                ))
+            await device_repository.save(device, device_id)
+
         self.__connected_device[discovery.id] = device_id
         await self.dependencies.output.controller_did_connect_device(self, device_id)
 
@@ -170,3 +194,32 @@ class MatterController(AbstractController):
         self.__connected_device[discovery_id] = None
 
         await self.dependencies.output.controller_did_receive_discovery(self, mj_discovery_info)
+
+    async def __on_attribute_cahnged(self, device_id: UUID, attribute_path: str, new_value):
+        paramter_id = self.__mapper.matter_id_to_uuid(attribute_path)
+        event = DeviceParameterChangedEvent(
+            device_id,
+            paramter_id,
+            new_value
+        )
+        await self.dependencies.output.controller_did_receive_device_events(self, [event])
+
+    def subscription(self, device: MatterDevice):
+        node = self.__matter_client.get_node(device.integration_data.node_id)
+        for endpoint_id, endpoint in node.endpoints.items():
+            for cluster_id, cluster in endpoint.clusters.items():
+                if hasattr(cluster, "Attributes"):
+                    for name, attribute in inspect.getmembers(cluster.Attributes, inspect.isclass):
+                        if not issubclass(attribute, ClusterAttributeDescriptor):
+                            continue
+
+                        attribute_path = f"{endpoint_id}/{cluster_id}/{attribute.attribute_id}"
+
+                        self.__matter_client.subscribe_events(
+                            lambda event_type, new_value, attr_path=attribute_path:
+                                asyncio.create_task(self.__on_attribute_cahnged(device.id, attr_path, new_value))
+                            ,
+                            EventType.ATTRIBUTE_UPDATED,
+                            node.node_id,
+                            attribute_path,
+                        )

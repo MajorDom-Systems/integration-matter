@@ -2,7 +2,7 @@ from enum import Enum
 from pydantic import BaseModel
 from typing import Any
 
-from majordom_hub.schemas.device import Device, Parameter
+from majordom_hub.schemas.device import Device, Parameter, DeviceState, ParameterState
 
 
 
@@ -13,7 +13,6 @@ class MatterParameterTypeEnum(str, Enum):
 
 class MatterDeviceIntegrationData(BaseModel):
     node_id: int
-    identify_endpoint_id: int
 
 
 class MatterParameterIntegrationData(BaseModel):
@@ -31,3 +30,11 @@ class MatterDevice(Device):
 
 class MatterParameter(Parameter):
     integration_data: MatterParameterIntegrationData
+
+
+class MatterParameterState(ParameterState):
+    integration_data: MatterParameterIntegrationData
+
+
+class MatterDeviceState(Device, DeviceState):
+    parameters: list[MatterParameterState]

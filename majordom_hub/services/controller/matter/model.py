@@ -1,9 +1,12 @@
+import base64
+import json
+
 from enum import Enum
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Any
 
 from majordom_hub.schemas.device import Device, Parameter, DeviceState, ParameterState
-
+from majordom_hub.schemas.base import Base
 
 
 class MatterParameterTypeEnum(str, Enum):
@@ -11,7 +14,7 @@ class MatterParameterTypeEnum(str, Enum):
     command = "command"
 
 
-class MatterDeviceIntegrationData(BaseModel):
+class MatterDeviceIntegrationData(Base):
     node_id: int
 
 
@@ -27,6 +30,13 @@ class MatterParameterIntegrationData(BaseModel):
 class MatterDevice(Device):
     integration_data: MatterDeviceIntegrationData
 
+    @property
+    def node_id(self) -> int:
+        assert self.integration_data
+        if isinstance(self.integration_data, dict):
+            return self.integration_data["node_id"]
+        return self.integration_data.node_id
+
 
 class MatterParameter(Parameter):
     integration_data: MatterParameterIntegrationData
@@ -35,6 +45,21 @@ class MatterParameter(Parameter):
 class MatterParameterState(ParameterState):
     integration_data: MatterParameterIntegrationData
 
+    @field_validator("value", mode="before")
+    def convert_to_bytes(cls, v):
+        if v is None:
+            return b""
+
+        if isinstance(v, bytes):
+            return v
+
+        if isinstance(v, str):
+            try:
+                return base64.b64decode(v)
+            except Exception:
+                return v.encode()
+        return b""
+        
 
 class MatterDeviceState(Device, DeviceState):
     parameters: list[MatterParameterState]

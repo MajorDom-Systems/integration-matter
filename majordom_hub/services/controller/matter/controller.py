@@ -5,9 +5,10 @@ from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import Identify
 from functools import partial
-from uuid import UUID
+from typing import Type, override
 from matter_server.client import MatterClient
 from matter_server.common.models import CommissionableNodeData, EventType
+from uuid import UUID
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
@@ -45,18 +46,27 @@ class MatterController(AbstractController):
     def discoveries(self) -> dict[UUID, Discovery]:
         return self.__majordom_descoveries
 
+    @property
+    @override
+    def device_type(self) -> Type[MatterDevice]:
+        return MatterDevice
+
+    @property
+    @override
+    def parameter_type(self) -> Type[MatterParameter]:
+        return MatterParameter
+
     async def start(self):
         self.__matter_client_session = ClientSession()
         self.__matter_client = MatterClient(matter_server_url, self.__matter_client_session)
-
+        await self.__matter_client.connect()
         event = asyncio.Event()
         asyncio.create_task(self.__matter_client.start_listening(init_ready=event))
         await event.wait()
-
-        await self.__matter_client.set_wifi_credentials(self.__matter_wifi_ssid, self.__matter_wifi_secret)
-        await self.__matter_client.set_thread_operational_dataset(self.__matter_thread_dataset)
-
-        await asyncio.create_task(self.__matter_discovery_loop())
+        # await self.__matter_client.set_wifi_credentials(self.__matter_wifi_ssid, self.__matter_wifi_secret)
+        # await self.__matter_client.set_thread_operational_dataset(self.__matter_thread_dataset)
+        
+        asyncio.create_task(self.__matter_discovery_loop())
 
     async def stop(self):
         if not self.__matter_client_session or not self.__matter_client:
@@ -66,16 +76,17 @@ class MatterController(AbstractController):
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
         if discovery.credentials is CredentialsType.qr:
-            commission_node = await self.__matter_client.comission_on_network(credentials)
+            commission_node = await self.__matter_client.commission_with_code(str(credentials))
         elif discovery.credentials is CredentialsType.code:
-            commission_node = await self.__matter_client.commision_with_code(credentials)
+            commission_node = await self.__matter_client.commission_on_network(int(credentials))
         else:
             raise RuntimeError("This credentials type is not supported")
         self.__majordom_descoveries.pop(discovery.id)
         node = self.__matter_client.get_node(commission_node.node_id)
         device_id = self.__mapper.matter_id_to_uuid(f"{node.device_info.productName}_{node.device_info.productID}")
         async with self.dependencies.make_device_repository() as device_repository:
-            device = await device_repository.state(device_id, MatterDeviceState)
+            device = await device_repository.state(discovery.id, MatterDeviceState)
+            assert device
             if device and (not device.integration_data):
                 device.integration_data = MatterDeviceIntegrationData(node_id=node.node_id)
             
@@ -92,26 +103,27 @@ class MatterController(AbstractController):
                     **parameter.__dict__,
                     value=value,
                 ))
-            await device_repository.save(device, device_id)
-
+            await device_repository.save(device, discovery.id)
+            await device_repository.update_id(discovery.id, device_id)
         self.__connected_device[discovery.id] = device_id
         await self.dependencies.output.controller_did_connect_device(self, device_id)
+        return device_id
 
     async def unpair(self, device: MatterDevice):
         for key, value in self.__connected_device.items():
             if value is device.id:
                 self.__connected_device.pop(key)
-        await self.__matter_client.remove_node(device.integration_data.node_id)
+        await self.__matter_client.remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
         command = Identify.Commands.Identify()
-        node = self.__matter_client.get_node(device.integration_data.node_id)
+        node = self.__matter_client.get_node(device.node_id)
         for endpoint_id in node.endpoints.keys():
             if node.has_cluster(3, endpoint_id):  # 3 is Identify cluster id
-                await self.__matter_client.send_device_command(device.integration_data.node_id, endpoint_id, command)
+                await self.__matter_client.send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
-        if not (node := self.__matter_client.get_node(device.integration_data.node_id)):
+        if not (node := self.__matter_client.get_node(device.node_id)):
             raise RuntimeError("Error this device is not found")        
         parameters = await self.__mapper.parse_matter_node_paramters_to_commands_and_attributes(self.__matter_client, node)
         events: list[DeviceParameterChangedEvent] = []
@@ -133,9 +145,9 @@ class MatterController(AbstractController):
         await self.dependencies.output.controller_did_receive_device_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
-        if not self.__matter_client.get_node(device.integration_data.node_id):
+        if not self.__matter_client.get_node(device.node_id):
             raise RuntimeError("Error this device is not found")
-        node = self.__matter_client.get_node(device.integration_data.node_id)
+        node = self.__matter_client.get_node(device.node_id)
         endpoint_id = parameter.integration_data.endpoint_id
         if not (endpoint := node.endpoints[endpoint_id]):
             raise ValueError("Endpoint dosent exist")
@@ -153,7 +165,7 @@ class MatterController(AbstractController):
                         continue
                     cmd_id = getattr(cmd_cls, "command_id", -1)
                     if cmd_id == parameter.integration_data.command_id:
-                        await self.__matter_client.send_device_command(node.node_id, endpoint_id, cluster_id, cmd_cls())
+                        await self.__matter_client.send_device_command(node.node_id, endpoint_id, cmd_cls())
         
         if parameter.integration_data.type is MatterParameterTypeEnum.attribute:
             attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
@@ -162,7 +174,7 @@ class MatterController(AbstractController):
         
         await self.dependencies.output.controller_did_receive_device_events(self, [])
 
-    async def __matter_discovery_loop(self, interval: int = 30):
+    async def __matter_discovery_loop(self, interval: int = 5):
         while True:
             try:
                 nodes: list[CommissionableNodeData] = await self.__matter_client.discover_commissionable_nodes()
@@ -174,6 +186,7 @@ class MatterController(AbstractController):
 
     async def __async_matter_did_discover(self, node: CommissionableNodeData):
         discovery_id = self.__mapper.matter_id_to_uuid(node.instance_name or node.device_name or "unknown")
+        print(f"[DEBUG] Discovery loop fired: {node.device_name} ({discovery_id})")
 
         if discovery_id in self.__connected_device and self.__connected_device[discovery_id]:
             print(f'{self.name} Discovered known device: {node.device_name or node.instance_name}')
@@ -191,7 +204,7 @@ class MatterController(AbstractController):
             transport = NonEmptyStr("IP" if node.addresses else "BLE"),
             device_name = NonEmptyStr(node.device_name or node.instance_name or "Unknown"),
             device_manufacturer = f"Vendor {node.vendor_id}" if node.vendor_id else None,
-            device_category = node.device_type,
+            device_category = str(node.device_type),
             device_icon = None,
         )
 
@@ -210,7 +223,7 @@ class MatterController(AbstractController):
         await self.dependencies.output.controller_did_receive_device_events(self, [event])
 
     def subscription(self, device: MatterDevice):
-        node = self.__matter_client.get_node(device.integration_data.node_id)
+        node = self.__matter_client.get_node(device.node_id)
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, cluster in endpoint.clusters.items():
                 if hasattr(cluster, "Attributes"):

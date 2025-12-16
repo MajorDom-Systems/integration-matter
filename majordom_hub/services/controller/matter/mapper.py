@@ -77,10 +77,10 @@ class MatterMapper():
                             continue
                         cmd_id = getattr(cmd_cls, "command_id", -1)
                         params.append(MatterParameter(
-                            id=self.matter_id_to_uuid(f"{endpoint_id}/{cluster_id}/{cmd_id}"),
+                            id=self.matter_id_to_uuid(f"command_{endpoint_id}/{cluster_id}/{cmd_id}"),
                             name=name,
                             data_type=ParameterDataType.none,
-                            role=ParameterRole.event,
+                            role=ParameterRole.control,
                             integration_data=MatterParameterIntegrationData(
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
@@ -116,7 +116,7 @@ class MatterMapper():
                         else:
                             role = ParameterRole.event
                         params.append(MatterParameter(
-                            id=self.matter_id_to_uuid(f"{endpoint_id}/{cluster_id}/{attr_id}"),
+                            id=self.matter_id_to_uuid(f"attribute_{endpoint_id}/{cluster_id}/{attr_id}"),
                             name=name,
                             data_type=self.get_parameter_data_type(value),
                             role=role,

@@ -171,9 +171,9 @@ async def test_events(async_client_ws_connect, crud, create_matter_device):
         await event.wait()
         node_id = client.get_nodes()[0].node_id
         await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
-        await client.send_device_command(node_id, 13, OnOff.Commands.Off())
         print("Command sended")
         async with async_client_ws_connect(user.id) as ws:
+            await client.send_device_command(node_id, 13, OnOff.Commands.Off())
             while True:
                 async with asyncio.timeout(10):
                     message = await ws.receive_json()

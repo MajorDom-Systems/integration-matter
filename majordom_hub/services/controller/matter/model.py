@@ -1,9 +1,7 @@
 import base64
-import json
 
 from enum import Enum
 from pydantic import BaseModel, field_validator
-from typing import Any
 
 from majordom_hub.schemas.device import Device, Parameter, DeviceState, ParameterState
 from majordom_hub.schemas.base import Base

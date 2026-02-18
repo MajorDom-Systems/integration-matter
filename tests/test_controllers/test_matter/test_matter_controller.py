@@ -1,5 +1,3 @@
-# end-to-end test for Matter
-
 import asyncio
 import random
 import pytest
@@ -10,24 +8,34 @@ from uuid import UUID
 from matter_server.client import MatterClient
 from chip.clusters.Objects import OnOff
 
+from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd, create_matter_device, get_device_integration_data
+
 from majordom_hub.config import matter_server_url
 
 
+
+
 @pytest.mark.asyncio
-async def test_discover_unpaired(async_client, crud, get_user_bearer):
-    await asyncio.sleep(5)
+async def test_discover_paired(start_mvd_with_pairing, async_client, crud, get_user_bearer):
+    user = await crud.create_user()
+    r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
+    assert r.status_code == 200
+    assert r.json() == {}
+
+@pytest.mark.asyncio
+async def test_discover_unpaired(start_mvd, async_client, crud, get_user_bearer):
+    await asyncio.sleep(10)
     user = await crud.create_user()
 
     r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
     assert r.status_code == 200
     assert r.json() != {}
 
-
 @pytest.mark.asyncio
-async def test_pair_device(async_client, crud, get_user_bearer):
+async def test_pair_device(start_mvd, async_client, crud, get_user_bearer):
+    await asyncio.sleep(10)
     user = await crud.create_user()
     room = await crud.create_room()
-
     r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
     assert r.status_code == 200
     discovery_id = list(r.json().keys())[0]
@@ -43,19 +51,10 @@ async def test_pair_device(async_client, crud, get_user_bearer):
     }
     r2 = await async_client.post('/v1/api/device', json=data, headers=get_user_bearer(user.id))
     assert r2.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_discover_paired(async_client, crud, get_user_bearer):
-    user = await crud.create_user()
-
-    r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
-    assert r.status_code == 200
-    assert r.json() == {}
-
+    await unpair_mvd()
 
 @pytest.mark.asyncio
-async def test_control_attribute(async_client_ws_connect, crud, create_matter_device):
+async def test_control_attribute(start_mvd, pair_unpair_mvd, async_client_ws_connect, crud):
     user = await crud.create_user()
     room = await crud.create_room()
     value = random.randint(0, 100)
@@ -63,18 +62,10 @@ async def test_control_attribute(async_client_ws_connect, crud, create_matter_de
     device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
     parameter_id = UUID('1b129906-a038-59ba-9d00-9a314aab4086')  # 13/8/17
 
-    session = ClientSession()
-    client = MatterClient(matter_server_url, session)
-    await client.connect()
-    event = asyncio.Event()
-    asyncio.create_task(client.start_listening(init_ready=event))
-    await event.wait()
-    node_id = client.get_nodes()[0].node_id
-
+    node_id = pair_unpair_mvd
+    print(node_id)
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
-    await client.disconnect()
-    await session.close()
-    
+
     msg_data = {
         'type': 'device_command',
         'data': {
@@ -98,27 +89,20 @@ async def test_control_attribute(async_client_ws_connect, crud, create_matter_de
     except WebSocketDisconnect as e:
         assert e.code == 1000
     assert message and message.get('type') == 'majordom_did_receive_event', message
+    
 
 
 @pytest.mark.asyncio
-async def test_control_command(async_client_ws_connect, crud, create_matter_device):
+async def test_control_command(start_mvd, pair_unpair_mvd, async_client_ws_connect, crud):
     user = await crud.create_user()
     room = await crud.create_room()
 
     device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
     parameter_id = UUID('9ff0f12c-620e-57ab-8a80-ef41cad97bb8') #  On command 
 
-    session = ClientSession()
-    client = MatterClient(matter_server_url, session)
-    await client.connect()
-    event = asyncio.Event()
-    asyncio.create_task(client.start_listening(init_ready=event))
-    await event.wait()
-    node_id = client.get_nodes()[0].node_id
+    node_id = pair_unpair_mvd
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
 
-    await client.disconnect()
-    await session.close()
     msg_data = {
         'type': 'device_command',
         'data': {
@@ -143,69 +127,85 @@ async def test_control_command(async_client_ws_connect, crud, create_matter_devi
         pytest.skip("Bug with httpx_ws")
     except WebSocketDisconnect as e:
         assert e.code == 1000
-    print(message)
     assert message and message.get('type') == 'majordom_did_receive_event', message
 
-
 @pytest.mark.asyncio
-async def test_events(async_client_ws_connect, crud, create_matter_device):
+async def test_events(start_mvd, async_client, async_client_ws_connect, crud, get_user_bearer):
+    await asyncio.sleep(10)
     user = await crud.create_user()
     room = await crud.create_room()
+
     device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
-    parameter_id = UUID('4ff82bf1-1bd3-50d3-a0cd-9cd01c64d21a')  # 13/6/0
-    expected_message= {
+    parameter_id = UUID('4ff82bf1-1bd3-50d3-a0cd-9cd01c64d21a')
+
+    r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
+    assert r.status_code == 200
+    discovery_id = list(r.json().keys())[0]
+
+    data = {
+        'name': 'Test Device 123',
+        'note': 'test note',
+        'icon': 'test icon',
+        'category': 'test category',
+        'discovery_id': discovery_id,
+        'room_id': str(room.id),
+        'credentials': 'MT:Y.K9042C00KA0648G00'
+    }
+    r = await async_client.post('/v1/api/device', json=data, headers=get_user_bearer(user.id))
+    assert r.status_code == 200
+    node_id = (await get_device_integration_data(device_id)).get("node_id")
+
+
+    expected_message = {
         'type': 'majordom_did_receive_event',
         'data': {
             'device_id': str(device_id),
             'parameter_id': str(parameter_id),
-            'value': False
+            'value': True
         }
     }
-    message = None
+
     session = ClientSession()
-    client = MatterClient(matter_server_url, session)
+    app = MatterClient(matter_server_url, session)
+    await app.connect()
+
+    event = asyncio.Event()
+    asyncio.create_task(app.start_listening(init_ready=event))
+    await event.wait()
+
+    message = None
+
+    messages = []
+
     try:
-        await client.connect()
-        event = asyncio.Event()
-        asyncio.create_task(client.start_listening(init_ready=event))
-        await event.wait()
-        node_id = client.get_nodes()[0].node_id
-        await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
-        print("Command sended")
         async with async_client_ws_connect(user.id) as ws:
-            await client.send_device_command(node_id, 13, OnOff.Commands.Off())
-            while True:
-                async with asyncio.timeout(10):
-                    message = await ws.receive_json()
-                    print(message)
-                if message['type'] == 'majordom_did_connect_device':
-                    continue
-                else:
-                    break
-    except WebSocketDisconnect as e:
-        assert e.code == 1000
+            try:
+                await app.send_device_command(node_id, 13, OnOff.Commands.On())
+                for _ in range(2):
+                    async with asyncio.timeout(5):
+                        message = await ws.receive_json()
+                        messages.append(message)
+                            
+            except TimeoutError:
+
+                print("Timeout error")
+
     finally:
-        await client.disconnect()
+        await app.disconnect()
         await session.close()
-    assert message
+        await unpair_mvd()
+    print(messages)
+    assert expected_message in messages
 
 
 @pytest.mark.asyncio
-async def test_unpair(async_client, crud, get_user_bearer, create_matter_device):
+async def test_unpair(start_mvd, async_client, crud, get_user_bearer):
     user = await crud.create_user()
     room = await crud.create_room()
     device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
     
-    session = ClientSession()
-    client = MatterClient(matter_server_url, session)
-    await client.connect()
-    event = asyncio.Event()
-    asyncio.create_task(client.start_listening(init_ready=event))
-    await event.wait()
-    node_id = client.get_nodes()[0].node_id
+    node_id = await pair_mvd()
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
 
-    await client.disconnect()
-    await session.close()
     r = await async_client.delete(f'/v1/api/device/{device_id}', headers=get_user_bearer(user.id))
     assert r.status_code == 200

@@ -63,7 +63,6 @@ async def test_control_attribute(start_mvd, pair_unpair_mvd, async_client_ws_con
     parameter_id = UUID('1b129906-a038-59ba-9d00-9a314aab4086')  # 13/8/17
 
     node_id = pair_unpair_mvd
-    print(node_id)
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
 
     msg_data = {
@@ -181,13 +180,12 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
         async with async_client_ws_connect(user.id) as ws:
             try:
                 await app.send_device_command(node_id, 13, OnOff.Commands.On())
-                for _ in range(2):
-                    async with asyncio.timeout(5):
+                async with asyncio.timeout(5):
+                    while True:
                         message = await ws.receive_json()
                         messages.append(message)
                             
             except TimeoutError:
-
                 print("Timeout error")
 
     finally:

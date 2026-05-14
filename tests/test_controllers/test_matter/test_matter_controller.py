@@ -13,8 +13,6 @@ from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd, crea
 from majordom_hub.config import matter_server_url
 
 
-
-
 @pytest.mark.asyncio
 async def test_discover_paired(start_mvd_with_pairing, async_client, crud, get_user_bearer):
     user = await crud.create_user()
@@ -130,17 +128,15 @@ async def test_control_command(start_mvd, pair_unpair_mvd, async_client_ws_conne
 
 @pytest.mark.asyncio
 async def test_events(start_mvd, async_client, async_client_ws_connect, crud, get_user_bearer):
-    await asyncio.sleep(10)
     user = await crud.create_user()
     room = await crud.create_room()
 
     device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
     parameter_id = UUID('4ff82bf1-1bd3-50d3-a0cd-9cd01c64d21a')
-
+    await asyncio.sleep(10)
     r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
     assert r.status_code == 200
     discovery_id = list(r.json().keys())[0]
-
     data = {
         'name': 'Test Device 123',
         'note': 'test note',
@@ -151,9 +147,9 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
         'credentials': 'MT:Y.K9042C00KA0648G00'
     }
     r = await async_client.post('/v1/api/device', json=data, headers=get_user_bearer(user.id))
+    
     assert r.status_code == 200
     node_id = (await get_device_integration_data(device_id)).get("node_id")
-
 
     expected_message = {
         'type': 'majordom_did_receive_event',
@@ -194,7 +190,6 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
         await unpair_mvd()
     print(messages)
     assert expected_message in messages
-
 
 @pytest.mark.asyncio
 async def test_unpair(start_mvd, async_client, crud, get_user_bearer):

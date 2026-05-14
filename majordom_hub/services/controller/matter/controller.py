@@ -1,9 +1,11 @@
 import asyncio
-import base64
+import enum
 import inspect
+import logging
 
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
+from chip.clusters.CHIPClusters import ChipClusters
 from chip.clusters.Objects import Identify
 from functools import partial
 from typing import Type, override
@@ -11,13 +13,15 @@ from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import CommissionableNodeData, EventType
 from uuid import UUID
+from dataclasses import fields, is_dataclass
+from typing import get_type_hints, get_origin, get_args
 
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.device import Discovery, CredentialsType, CredentialsValue
-from majordom_hub.schemas.parameter import ParameterRole, ParameterDataType
+from majordom_hub.schemas.parameter import Parameter, ParameterRole, ParameterDataType, ParameterVisibility, ParameterUnit
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 
@@ -31,6 +35,7 @@ from .model import (
     MatterParameterIntegrationData
 )
 from .mapper import MatterMapper
+from .matter_spec import SYSTEM_ATTRIBUTES, SYSTEM_CLUSTERS, ATTRIBUTE_UNITS, ATTRIBUTE_MIN_STEPS
 
 
 class MatterController(AbstractController):
@@ -78,14 +83,10 @@ class MatterController(AbstractController):
         # await self._matter_client.set_thread_operational_dataset(self._matter_thread_dataset)
         
         asyncio.create_task(self._matter_discovery_loop())
-        if self._connected_device:
-            for device_id in self._connected_device.values():
-                async with self.dependencies.make_device_repository() as device_repository:
-                    device = await device_repository.get(device_id, MatterDevice)
-                    if not device:
-                        continue
-                    node = self._matter_client.get_node(device.node_id)
-                    self._subscription(device_id, node)
+        async with self.dependencies.make_device_repository() as device_repository:
+            for device in await device_repository.get_all(self.name, MatterDevice):
+                node = self._matter_client.get_node(device.node_id)
+                self._subscription(device.id, node)
 
     async def stop(self):
         if not self._matter_client_session or not self._matter_client:
@@ -102,6 +103,11 @@ class MatterController(AbstractController):
             raise RuntimeError("This credentials type is not supported")
         self._majordom_descoveries.pop(discovery.id)
         node = self._matter_client.get_node(commission_node.node_id)
+
+        logging.info(f"Product_id: {node.device_info.productID}")
+        logging.info(f"Device_name: {node.device_info.productName}")
+        logging.info(f"Device_type: {node.device_info.productLabel}")
+        # logging.info(f"Instance_name: {}")
         device_id = self._mapper.matter_id_to_uuid(f"{node.device_info.productName}_{node.device_info.productID}")
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, MatterDeviceState)
@@ -180,12 +186,12 @@ class MatterController(AbstractController):
             if parameter.integration_data.command_id is None or parameter.integration_data.command_id < 0:
                 raise ValueError("Error with command_id")
             if hasattr(cluster, "Commands"):
-                for _, cmd_cls in inspect.getmembers(cluster.Commands, inspect.isclass):
-                    if not issubclass(cmd_cls, ClusterCommand):
+                for _, command in inspect.getmembers(cluster.Commands, inspect.isclass):
+                    if not issubclass(command, ClusterCommand):
                         continue
-                    cmd_id = getattr(cmd_cls, "command_id", -1)
-                    if cmd_id == parameter.integration_data.command_id:
-                        await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_cls())
+                    command_id = getattr(command, "command_id", -1)
+                    if command_id == parameter.integration_data.command_id:
+                        await self._matter_client.send_device_command(node.node_id, endpoint_id, command())
         if parameter.integration_data.type is MatterParameterTypeEnum.attribute:
             if parameter.role != ParameterRole.control:
                 raise RuntimeError("This parameter not writable")
@@ -193,11 +199,11 @@ class MatterController(AbstractController):
             if attribute_path in node.node_data.attributes.keys():
                 await self._matter_client.write_attribute(node.node_id, attribute_path, command.value)
                 value = node.get_attribute_value(endpoint_id, cluster_id, parameter.integration_data.attribute_id)
-        event = DeviceParameterChangedEvent(
-            device_id = device.id,
-            parameter_id = parameter.id,
-            value = value,
-        )
+        # event = DeviceParameterChangedEvent(
+        #     device_id = device.id,
+        #     parameter_id = parameter.id,
+        #     value = value,
+        # )
         #await self.dependencies.output.controller_did_receive_device_events(self, [event])
 
     # helpers
@@ -208,58 +214,102 @@ class MatterController(AbstractController):
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, cluster in endpoint.clusters.items():
                 if hasattr(cluster, "Commands"):
-                    for name, cmd_cls in inspect.getmembers(cluster.Commands, inspect.isclass):
-                        if not issubclass(cmd_cls, ClusterCommand):
+                    for name, command in inspect.getmembers(cluster.Commands, inspect.isclass):
+                        if not issubclass(command, ClusterCommand):
                             continue
-                        cmd_id = getattr(cmd_cls, "command_id", -1)
+
+                        command_id = getattr(command, "command_id", -1)
+                        args: list[Parameter] = []
+
+                        if isinstance(command, type) and is_dataclass(command):
+                            command_types = get_type_hints(command)
+                            
+                            for field in fields(command):
+                                if field.name.startswith("_"):
+                                    continue
+
+                                valid_values = None
+                                field_type = command_types.get(field.name, field.type)
+                                data_type = ParameterDataType.none
+
+                                if get_origin(field_type):
+                                    field_type = get_args(field_type)[-1]
+
+                                if isinstance(field_type, type):
+                                    if issubclass(field_type, enum.Enum):
+                                        data_type = ParameterDataType.enum
+                                        valid_values = {member.name: str(member.value) for member in field_type}
+                                    elif issubclass(field_type, int):
+                                        data_type = ParameterDataType.integer
+                                    elif issubclass(field_type, str):
+                                        data_type = ParameterDataType.string
+
+                                args.append(Parameter(
+                                    id=self._mapper.matter_id_to_uuid(f"{endpoint_id}/{cluster_id}/{command_id}/{field.name}"),
+                                    name=field.name,
+                                    data_type=data_type,
+                                    unit=ParameterUnit.plain,
+                                    role=ParameterRole.control,
+                                    valid_values=valid_values,
+                                    visibility=ParameterVisibility.setting,
+                                    integration_data=None,
+                                ))
+
                         params.append(MatterParameter(
-                            id=self._mapper.matter_id_to_uuid(f"command_{endpoint_id}/{cluster_id}/{cmd_id}"),
+                            id=self._mapper.matter_id_to_uuid(f"command_{endpoint_id}/{cluster_id}/{command_id}"),
                             name=name,
                             data_type=ParameterDataType.none,
                             role=ParameterRole.control,
+                            visibility=ParameterVisibility.setting,
                             integration_data=MatterParameterIntegrationData(
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
-                                command_id=cmd_id,
+                                command_id=command_id,
                                 type=MatterParameterTypeEnum.command,
                             ),
                         ))
                 
                 if hasattr(cluster, "Attributes"):
-                    for name, attr_cls in inspect.getmembers(cluster.Attributes, inspect.isclass):
-                        if not issubclass(attr_cls, ClusterAttributeDescriptor):
+                    for name, attribute in inspect.getmembers(cluster.Attributes, inspect.isclass):
+                        if not issubclass(attribute, ClusterAttributeDescriptor):
                             continue
-                        attr_id = getattr(attr_cls, "attribute_id", -1)
-                        value = None
-                        try:
-                            value = node.get_attribute_value(endpoint_id, cluster_id, attr_id)
-                            can_read = True
-                        except Exception:
-                            can_read = False
-                        try:
-                            await self._matter_client.write_attribute(
-                                node.node_id,
-                                f"{endpoint_id}/{cluster_id}/{attr_id}",
-                                value
-                            )
-                            can_write = True
-                        except Exception:
-                            can_write = False
-                        if can_read and can_write:
-                            role = ParameterRole.control
-                        elif can_read:
-                            role = ParameterRole.sensor
-                        else:
-                            role = ParameterRole.event
+                        attribute_id = getattr(attribute, "attribute_id", -1)
+                        value = endpoint.get_attribute_value(cluster_id, attribute_id)
+                        visibility = ParameterVisibility.system
+                        role = ParameterRole.sensor
+                        min_value, max_value = self._mapper.get_min_max_value(attribute, value)
+                        valid_values = None
+                        unit = ATTRIBUTE_UNITS.get((cluster_id, attribute_id), ParameterUnit.plain)
+                        min_step = ATTRIBUTE_MIN_STEPS.get((cluster_id, attribute_id), None)
+
+                        if cluster_id not in SYSTEM_CLUSTERS and attribute_id not in SYSTEM_ATTRIBUTES:
+                            sdk_cluster = ChipClusters(None).GetClusterInfoById(cluster_id)
+                            sdk_attributre = sdk_cluster.get("attributes").get(attribute_id)
+                            if sdk_attributre.get("writable"):
+                                visibility = ParameterVisibility.setting
+                                role = ParameterRole.control
+                            else:
+                                visibility = ParameterVisibility.user
+
+                        if attribute.attribute_type and hasattr(attribute.attribute_type, "Type") and isinstance(attribute.attribute_type.Type, type):
+                            if issubclass(attribute.attribute_type.Type, enum.Enum) or issubclass(attribute.attribute_type.Type, enum.Flag):
+                                valid_values = {member.name: str(member.value) for member in attribute.attribute_type.Type}                        
+
                         params.append(MatterParameter(
-                            id=self._mapper.matter_id_to_uuid(f"attribute_{endpoint_id}/{cluster_id}/{attr_id}"),
+                            id=self._mapper.matter_id_to_uuid(f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
                             name=name,
-                            data_type=self._mapper.get_parameter_data_type(value),
+                            data_type=self._mapper.get_parameter_data_type_from_value(value),
+                            visibility=visibility,
+                            min_value=min_value,
+                            max_value=max_value,
+                            valid_values=valid_values,
+                            min_step=min_step,
+                            unit=unit,
                             role=role,
                             integration_data=MatterParameterIntegrationData(
                                 endpoint_id=endpoint_id,
                                 cluster_id=cluster_id,
-                                attribute_id=attr_id,
+                                attribute_id=attribute_id,
                                 type=MatterParameterTypeEnum.attribute,
                             ),
                         ))
@@ -277,7 +327,10 @@ class MatterController(AbstractController):
 
     async def _async_matter_did_discover(self, node: CommissionableNodeData):
         discovery_id = self._mapper.matter_id_to_uuid(node.instance_name or node.device_name or "unknown")
-
+        logging.info(f"Discvoery product_id: {node.product_id}")
+        logging.info(f"Discovery device_name: {node.device_name}")
+        logging.info(f"Discovery device_type: {node.device_type}")
+        logging.info(f"Discovery instance_name: {node.instance_name}")
         if (device_id := self._connected_device.get(discovery_id)):
             print(f'{self.name} Discovered known device: {node.device_name or node.instance_name}')
 

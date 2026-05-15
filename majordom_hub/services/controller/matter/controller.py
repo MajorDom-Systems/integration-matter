@@ -96,7 +96,7 @@ class MatterController(AbstractController):
         # Re-subscribe to attribute updates for devices that were already paired.
         async with self.dependencies.make_device_repository() as device_repository:
             for device in await device_repository.get_all(self.name, MatterDevice):
-                node = self._matter_client.get_node(device.node_id)
+                node = self._matter_client.get_node(device.integration_data.node_id)
                 self._subscription(device.id, node)
 
     async def stop(self):

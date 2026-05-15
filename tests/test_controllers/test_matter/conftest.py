@@ -12,7 +12,7 @@ from matter_server.client import MatterClient
 
 from tests.test_controllers.test_matter.parameters import parameters
 
-from majordom_hub.config import matter_server_url
+# from majordom_hub.config import matter_server_url
 from majordom_hub.services.controller.matter.model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameterTypeEnum, MatterParameterState
 from majordom_hub.repository.device_repository import DeviceRepository
 from majordom_hub.utils.database import create_async_session
@@ -59,7 +59,6 @@ async def start_mvd_with_pairing():
 @pytest_asyncio.fixture(scope="function")
 async def pair_unpair_mvd(code: str="20202021"):
     try:
-
         node_id = await pair_mvd(code)
         yield node_id
         await unpair_mvd()

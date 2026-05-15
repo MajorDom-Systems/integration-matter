@@ -114,3 +114,29 @@ ATTRIBUTE_MIN_STEPS: dict[tuple[int, int], int | float] = {
     (0x0102, 0x000C): 0.01,             # TargetPositionTiltPercent100ths (percent100ths, 0.01%)
     
 }
+
+MAIN_PARAMETER_BY_CLUSTER = [
+    # Lighting & power
+    (0x0006, 0x0002),  # OnOff → Toggle
+    (0x0008, 0x0000),  # LevelControl → MoveToLevel
+    (0x0300, 0x0006),  # ColorControl → MoveToHueAndSaturation
+    # Covers & closures
+    (0x0102, 0x0005),  # WindowCovering → GoToLiftPercentage
+    (0x0101, 0x0000),  # DoorLock → LockDoor
+    # HVAC
+    (0x0201, 0x0000),  # Thermostat → SetpointRaiseLower
+    (0x0514, 0x0000),  # Thermostat User Interface Config — нет команд, пропуск
+    # Appliances (Matter 1.2+)
+    (0x0057, 0x0000),  # OperationalState → Pause (пылесос, стиралка, посудомойка)
+    (0x0054, 0x0000),  # RvcRunMode → ChangeToMode (робот-пылесос)
+    (0x0055, 0x0000),  # RvcCleanMode → ChangeToMode
+    (0x0059, 0x0000),  # DishwasherMode → ChangeToMode
+    (0x0051, 0x0000),  # LaundryWasherMode → ChangeToMode
+    (0x005C, 0x0000),  # MicrowaveOvenControl → SetCookingParameters
+    (0x0050, 0x0000),  # ModeSelect → ChangeToMode (универсальный режим)
+    # Energy
+    (0x0099, 0x0001),  # EnergyEvse → EnableCharging (EV зарядка)
+    # Media
+    (0x0506, 0x0000),  # MediaPlayback → Play
+    (0x0509, 0x0000),  # KeypadInput → SendKey
+]

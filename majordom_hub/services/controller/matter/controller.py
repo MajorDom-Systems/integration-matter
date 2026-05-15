@@ -29,7 +29,7 @@ from majordom_hub.schemas.parameter import (
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 from .mapper import MatterMapper
-from .matter_spec import ATTRIBUTE_MIN_STEPS, ATTRIBUTE_UNITS, SYSTEM_ATTRIBUTES, SYSTEM_CLUSTERS
+from .matter_spec import ATTRIBUTE_MIN_STEPS, ATTRIBUTE_UNITS, SYSTEM_ATTRIBUTES, SYSTEM_CLUSTERS, MAIN_PARAMETER_BY_CLUSTER
 from .model import (
     MatterDevice,
     MatterDeviceIntegrationData,
@@ -45,8 +45,8 @@ class MatterController(AbstractController):
     _matter_client: MatterClient
     _matter_client_session: ClientSession
 
-    # Maps discovery_id → device_id (None while the device is not yet paired).
     _majordom_descoveries: dict[UUID, Discovery] = dict()
+    # Maps discovery_id → device_id (None while the device is not yet paired).
     _connected_device: dict[UUID, UUID | None] = dict()
 
     _matter_wifi_ssid: str
@@ -143,7 +143,7 @@ class MatterController(AbstractController):
                                 parameter.integration_data.attribute_id,
                             )
                             device.parameters.append(MatterParameterState(**parameter.__dict__, value=value))
-
+            device.main_parameter = self._get_main_parameter(device.id, node)
             await device_repository.save(device, discovery.id)
             await device_repository.update_id(discovery.id, device_id)
 
@@ -364,6 +364,13 @@ class MatterController(AbstractController):
             ))
 
         return params
+
+    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> UUID | None:
+        for endpoint_id, endpoint in node.endpoints.items():
+            for cluster_id, command_id in MAIN_PARAMETER_BY_CLUSTER:
+                if cluster_id in endpoint.clusters:
+                    return self._mapper.matter_id_to_uuid(f"command_{endpoint_id}/{cluster_id}/{command_id}")
+        return None
 
     # -------------------------------------------------------------------------
     # Private: discovery

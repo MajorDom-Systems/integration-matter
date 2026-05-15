@@ -14,7 +14,7 @@ from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import CommissionableNodeData, EventType
 
-from majordom_hub.config import matter_server_url
+# from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.schemas.command import DeviceCommand
@@ -83,7 +83,7 @@ class MatterController(AbstractController):
 
     async def start(self):
         self._matter_client_session = ClientSession()
-        self._matter_client = MatterClient(matter_server_url, self._matter_client_session)
+        self._matter_client = MatterClient("ws://localhost:5580/ws", self._matter_client_session)
         await self._matter_client.connect()
 
         # start_listening runs in background; we wait only until it signals ready.

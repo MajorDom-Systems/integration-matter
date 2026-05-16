@@ -28,6 +28,7 @@ from majordom_hub.schemas.parameter import (
 )
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
+from .exceptions import MatterConnectionError, MatterUnexpectedError
 from .mapper import MatterMapper
 from .matter_spec import ATTRIBUTE_MIN_STEPS, ATTRIBUTE_UNITS, SYSTEM_ATTRIBUTES, SYSTEM_CLUSTERS, MAIN_PARAMETER_BY_CLUSTER
 from .model import (
@@ -110,12 +111,15 @@ class MatterController(AbstractController):
     # -------------------------------------------------------------------------
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+
         if discovery.credentials is CredentialsType.qr:
             commission_node = await self._matter_client.commission_with_code(str(credentials))
         elif discovery.credentials is CredentialsType.code:
             commission_node = await self._matter_client.commission_on_network(int(credentials))
         else:
-            raise RuntimeError("This credentials type is not supported")
+            raise MatterUnexpectedError("This credentials type is not supported")
 
         self._majordom_descoveries.pop(discovery.id)
         node = self._matter_client.get_node(commission_node.node_id)
@@ -151,6 +155,9 @@ class MatterController(AbstractController):
         return device_id
 
     async def unpair(self, device: MatterDevice):
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+
         for key, value in self._connected_device.items():
             if value == device.id:
                 self._connected_device.pop(key)
@@ -158,7 +165,9 @@ class MatterController(AbstractController):
         await self._matter_client.remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
-        """Triggers the Identify cluster (id=3) on every endpoint that supports it."""
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+
         command = Identify.Commands.Identify()
         node = self._matter_client.get_node(device.node_id)
         for endpoint_id in node.endpoints.keys():
@@ -166,10 +175,12 @@ class MatterController(AbstractController):
                 await self._matter_client.send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
-        """Reads current attribute values directly from the device and emits change events."""
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+
         node = self._matter_client.get_node(device.node_id)
         if not node:
-            raise RuntimeError("Device node not found")
+            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
 
         events = []
         for endpoint_id, endpoint in node.endpoints.items():
@@ -193,19 +204,22 @@ class MatterController(AbstractController):
         await self.dependencies.output.controller_did_receive_device_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+
         node = self._matter_client.get_node(device.node_id)
         if not node:
-            raise RuntimeError("Device node not found")
+            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
 
         endpoint_id = parameter.integration_data.endpoint_id
         endpoint = node.endpoints.get(endpoint_id)
         if not endpoint:
-            raise ValueError("Endpoint does not exist")
+            raise MatterUnexpectedError(f"Endpoint {endpoint_id} not found on node {node.node_id}")
 
         cluster_id = parameter.integration_data.cluster_id
         cluster = endpoint.clusters.get(cluster_id)
         if not cluster:
-            raise ValueError("Cluster does not exist")
+            raise MatterUnexpectedError(f"Cluster {cluster_id} not found on endpoint {endpoint_id}")
 
         if parameter.integration_data.type is MatterParameterTypeEnum.command:
             await self._execute_cluster_command(node, endpoint_id, cluster, parameter)
@@ -219,7 +233,7 @@ class MatterController(AbstractController):
     async def _execute_cluster_command(self, node, endpoint_id: int, cluster, parameter: MatterParameter):
         command_id = parameter.integration_data.command_id
         if command_id is None or command_id < 0:
-            raise ValueError("Invalid command_id")
+            raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
 
         if not hasattr(cluster, "Commands"):
             return
@@ -233,7 +247,7 @@ class MatterController(AbstractController):
 
     async def _write_cluster_attribute(self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand):
         if parameter.role != ParameterRole.control:
-            raise RuntimeError("Parameter is not writable")
+            raise MatterUnexpectedError(f"Parameter '{parameter.name}' is not writable")
 
         attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
         if attribute_path in node.node_data.attributes:
@@ -388,7 +402,7 @@ class MatterController(AbstractController):
 
     async def _async_matter_did_discover(self, node: CommissionableNodeData):
         discovery_id = self._mapper.matter_id_to_uuid(
-            node.instance_name or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else "unknown"}"
+            node.instance_name or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else 'unknown'}"
         )
 
         # If we already know this device, just make sure subscription is active.

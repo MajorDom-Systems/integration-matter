@@ -119,9 +119,7 @@ class MatterController(AbstractController):
 
         self._majordom_descoveries.pop(discovery.id)
         node = self._matter_client.get_node(commission_node.node_id)
-        device_id = self._mapper.matter_id_to_uuid(
-            f"{node.device_info.productName}_{node.device_info.productID}"
-        )
+        device_id = self._mapper.matter_id_to_uuid(f"{node.node_id}_{node.device_info.productName}")
 
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, MatterDeviceState)
@@ -133,11 +131,11 @@ class MatterController(AbstractController):
             for endpoint_id, endpoint in node.endpoints.items():
                 for cluster_id, cluster in endpoint.clusters.items():
                     if hasattr(cluster, "Commands"):
-                        for parameter in self._parse_commands(endpoint_id, cluster_id, cluster):
+                        for parameter in self._parse_commands(device_id, endpoint_id, cluster_id, cluster):
                             device.parameters.append(MatterParameterState(**parameter.__dict__, value=b""))
 
                     if hasattr(cluster, "Attributes"):
-                        for parameter in self._parse_attributes(endpoint_id, cluster_id, cluster, endpoint):
+                        for parameter in self._parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint):
                             value = node.get_attribute_value(
                                 endpoint_id, cluster_id,
                                 parameter.integration_data.attribute_id,
@@ -184,7 +182,7 @@ class MatterController(AbstractController):
                     attribute_id = getattr(attribute, "attribute_id", -1)
                     value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
                     parameter_id = self._mapper.matter_id_to_uuid(
-                        f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"
+                        f"{device.id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"
                     )
                     events.append(DeviceParameterChangedEvent(
                         device_id=device.id,
@@ -245,7 +243,7 @@ class MatterController(AbstractController):
     # Private: node parsing
     # -------------------------------------------------------------------------
 
-    def _parse_commands(self, endpoint_id: int, cluster_id: int, cluster) -> list[MatterParameter]:
+    def _parse_commands(self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster) -> list[MatterParameter]:
         params = []
 
         for name, command in inspect.getmembers(cluster.Commands, inspect.isclass):
@@ -283,7 +281,7 @@ class MatterController(AbstractController):
                     args.append(
                         Parameter(
                             id=self._mapper.matter_id_to_uuid(
-                                f"{endpoint_id}/{cluster_id}/{command_id}/{field.name}"
+                                f"{device_id}_field_{endpoint_id}/{cluster_id}/{command_id}/{field.name}"
                             ),
                             name=field.name,
                             data_type=data_type,
@@ -296,7 +294,7 @@ class MatterController(AbstractController):
                     )
 
             params.append(MatterParameter(
-                id=self._mapper.matter_id_to_uuid(f"command_{endpoint_id}/{cluster_id}/{command_id}"),
+                id=self._mapper.matter_id_to_uuid(f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}"),
                 name=name,
                 data_type=ParameterDataType.none,
                 role=ParameterRole.control,
@@ -312,7 +310,7 @@ class MatterController(AbstractController):
 
         return params
 
-    def _parse_attributes(self, endpoint_id: int, cluster_id: int, cluster, endpoint) -> list[MatterParameter]:
+    def _parse_attributes(self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, endpoint) -> list[MatterParameter]:
         params = []
 
         for name, attribute in inspect.getmembers(cluster.Attributes, inspect.isclass):
@@ -345,7 +343,7 @@ class MatterController(AbstractController):
             min_value, max_value = self._mapper.get_min_max_value(attribute, value)
 
             params.append(MatterParameter(
-                id=self._mapper.matter_id_to_uuid(f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
+                id=self._mapper.matter_id_to_uuid(f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
                 name=name,
                 data_type=self._mapper.get_parameter_data_type_from_value(value),
                 visibility=visibility,
@@ -369,7 +367,7 @@ class MatterController(AbstractController):
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, command_id in MAIN_PARAMETER_BY_CLUSTER:
                 if cluster_id in endpoint.clusters:
-                    return self._mapper.matter_id_to_uuid(f"command_{endpoint_id}/{cluster_id}/{command_id}")
+                    return self._mapper.matter_id_to_uuid(f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}")
         return None
 
     # -------------------------------------------------------------------------
@@ -390,7 +388,7 @@ class MatterController(AbstractController):
 
     async def _async_matter_did_discover(self, node: CommissionableNodeData):
         discovery_id = self._mapper.matter_id_to_uuid(
-            node.instance_name or node.device_name or "unknown"
+            node.instance_name or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else "unknown"}"
         )
 
         # If we already know this device, just make sure subscription is active.
@@ -442,7 +440,7 @@ class MatterController(AbstractController):
                     if not issubclass(attribute, ClusterAttributeDescriptor):
                         continue
                     attribute_path = f"{endpoint_id}/{cluster_id}/{attribute.attribute_id}"
-                    parameter_id = self._mapper.matter_id_to_uuid("attribute_" + attribute_path)
+                    parameter_id = self._mapper.matter_id_to_uuid(f"{device_id}_attribute_{attribute_path}")
                     self._matter_client.subscribe_events(
                         self._make_callback(device_id, parameter_id),
                         EventType.ATTRIBUTE_UPDATED,

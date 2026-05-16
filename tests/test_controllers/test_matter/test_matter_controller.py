@@ -47,18 +47,18 @@ async def test_pair_device(start_mvd, async_client, crud, get_user_bearer):
         'room_id': str(room.id),
         'credentials': 'MT:Y.K9042C00KA0648G00'
     }
-    r2 = await async_client.post('/v1/api/device', json=data, headers=get_user_bearer(user.id))
-    assert r2.status_code == 200
+    r = await async_client.post('/v1/api/device', json=data, headers=get_user_bearer(user.id))
+    assert r.status_code == 200
     await unpair_mvd()
 
 @pytest.mark.asyncio
 async def test_control_attribute(start_mvd, pair_unpair_mvd, async_client_ws_connect, crud):
     user = await crud.create_user()
     room = await crud.create_room()
-    value = random.randint(0, 100)
+    value = random.randint(1, 254)
 
-    device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
-    parameter_id = UUID('1b129906-a038-59ba-9d00-9a314aab4086')  # 13/8/17
+    device_id = UUID('00000000-0000-0000-0000-000000000000')
+    parameter_id = UUID('00000000-0000-0000-0000-000000000001')
 
     node_id = pair_unpair_mvd
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
@@ -94,8 +94,8 @@ async def test_control_command(start_mvd, pair_unpair_mvd, async_client_ws_conne
     user = await crud.create_user()
     room = await crud.create_room()
 
-    device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
-    parameter_id = UUID('9ff0f12c-620e-57ab-8a80-ef41cad97bb8') #  On command 
+    device_id = UUID('00000000-0000-0000-0000-000000000000')
+    parameter_id = UUID('00000000-0000-0000-0000-000000000000')
 
     node_id = pair_unpair_mvd
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)
@@ -131,8 +131,6 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
     user = await crud.create_user()
     room = await crud.create_room()
 
-    device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
-    parameter_id = UUID('4ff82bf1-1bd3-50d3-a0cd-9cd01c64d21a')
     await asyncio.sleep(10)
     r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
     assert r.status_code == 200
@@ -147,8 +145,15 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
         'credentials': 'MT:Y.K9042C00KA0648G00'
     }
     r = await async_client.post('/v1/api/device', json=data, headers=get_user_bearer(user.id))
-    
     assert r.status_code == 200
+    device_id = r.json()["id"]
+    r = await async_client.get(f'/v1/api/device/{device_id}', headers=get_user_bearer(user.id))
+    parameter_id = next(
+        parameter["id"] for parameter in r.json()["parameters"]
+        if parameter["integration_data"]["cluster_id"] == 6
+        and parameter["integration_data"]["attribute_id"] == 0
+        and parameter["integration_data"]["type"] == "attribute"
+    )
     node_id = (await get_device_integration_data(device_id)).get("node_id")
 
     expected_message = {
@@ -183,19 +188,17 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
                             
             except TimeoutError:
                 print("Timeout error")
-
     finally:
         await app.disconnect()
         await session.close()
         await unpair_mvd()
-    print(messages)
     assert expected_message in messages
 
 @pytest.mark.asyncio
 async def test_unpair(start_mvd, async_client, crud, get_user_bearer):
     user = await crud.create_user()
     room = await crud.create_room()
-    device_id = UUID('2df7fec5-26ef-5119-800d-3934a5840916')
+    device_id = UUID('00000000-0000-0000-0000-000000000000')
     
     node_id = await pair_mvd()
     await create_matter_device(id=device_id, node_id=node_id, room_id=room.id)

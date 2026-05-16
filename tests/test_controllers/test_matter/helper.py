@@ -6,7 +6,7 @@ from matter_server.client import MatterClient
 
 from tests.test_controllers.test_matter.parameters import parameters
 
-# from majordom_hub.config import matter_server_url
+from majordom_hub.config import matter_server_url
 from majordom_hub.services.controller.matter.model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameterState
 from majordom_hub.repository.device_repository import DeviceRepository
 from majordom_hub.utils.database import create_async_session
@@ -45,7 +45,7 @@ async def get_device_integration_data(device_id: UUID) -> dict:
 
 async def pair_mvd(code: str="20202021"):
     session = ClientSession()
-    app = MatterClient("ws://localhost:5580/ws", session)
+    app = MatterClient(matter_server_url, session)
     try:
         await app.connect()
         event = asyncio.Event()
@@ -62,7 +62,7 @@ async def pair_mvd(code: str="20202021"):
 
 async def unpair_mvd(node_id: int | None = None):
     session = ClientSession()
-    app = MatterClient("ws://localhost:5580/ws", session)
+    app = MatterClient(matter_server_url, session)
 
     try:
         await app.connect()

@@ -10,7 +10,7 @@ from chip.clusters.Objects import OnOff
 
 from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd, create_matter_device, get_device_integration_data
 
-# from majordom_hub.config import matter_server_url
+from majordom_hub.config import matter_server_url
 
 
 @pytest.mark.asyncio
@@ -166,7 +166,7 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
     }
 
     session = ClientSession()
-    app = MatterClient("ws://localhost:5580/ws", session)
+    app = MatterClient(matter_server_url, session)
     await app.connect()
 
     event = asyncio.Event()

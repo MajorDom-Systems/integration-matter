@@ -93,19 +93,34 @@ class MatterController(AbstractController):
         asyncio.create_task(self._matter_discovery_loop())
 
         # Re-subscribe to attribute updates for devices that were already paired.
-        devices_node: list[int] = []
+        device_nodes: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
             for device in await device_repository.get_all(self.name, MatterDevice):
                 if node := self._matter_client.get_node(device.integration_data.node_id):
                     self._subscription(device.id, node)
-                    devices_node.append(device.integration_data.node_id)
+                    device_nodes.append(device.integration_data.node_id)
                 else:
                     device.available = False
-                    device.last_error = ""
+                    device.last_error = f"Device {device.name} is no longer connected to the Matter network"
                     await device_repository.save(device, device.id)
-            # for node in self._matter_client.get_nodes():
-            #     if node.node_id not in devices_node:
-            #         await self._matter_client.remove_node(node.node_id)
+            
+            for node in self._matter_client.get_nodes():
+                if node.node_id in device_nodes:
+                    continue
+                discovery_id = self._mapper.matter_id_to_uuid(f"{node.node_id}_{node.device_info.productName}")
+                discovery = Discovery(
+                    id=discovery_id,
+                    integration=NonEmptyStr(self.name),
+                    credentials=CredentialsType.none,
+                    expiration=None,
+                    transport=NonEmptyStr("IP"),
+                    device_name=NonEmptyStr(node.device_info.productName or "Unknown"),
+                    device_manufacturer=node.device_info.vendorName or str(node.device_info.vendorID),
+                    device_category=None,
+                    device_icon=None,
+                )
+                self._majordom_descoveries[discovery_id] = discovery
+                await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 
     async def stop(self):
         if not self._matter_client_session or not self._matter_client:

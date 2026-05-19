@@ -9,7 +9,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.CHIPClusters import ChipClusters
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
-from chip.clusters.Objects import Identify
+from chip.clusters.Objects import Identify, OperationalCredentials
 from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import CommissionableNodeData, EventType
@@ -47,8 +47,6 @@ class MatterController(AbstractController):
     _matter_client_session: ClientSession
 
     _majordom_descoveries: dict[UUID, Discovery] = dict()
-    # Maps discovery_id → device_id (None while the device is not yet paired).
-    _connected_device: dict[UUID, UUID | None] = dict()
 
     _matter_wifi_ssid: str
     _matter_wifi_secret: str
@@ -95,10 +93,19 @@ class MatterController(AbstractController):
         asyncio.create_task(self._matter_discovery_loop())
 
         # Re-subscribe to attribute updates for devices that were already paired.
+        devices_node: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
             for device in await device_repository.get_all(self.name, MatterDevice):
-                node = self._matter_client.get_node(device.integration_data.node_id)
-                self._subscription(device.id, node)
+                if node := self._matter_client.get_node(device.integration_data.node_id):
+                    self._subscription(device.id, node)
+                    devices_node.append(device.integration_data.node_id)
+                else:
+                    device.available = False
+                    device.last_error = ""
+                    await device_repository.save(device, device.id)
+            # for node in self._matter_client.get_nodes():
+            #     if node.node_id not in devices_node:
+            #         await self._matter_client.remove_node(node.node_id)
 
     async def stop(self):
         if not self._matter_client_session or not self._matter_client:
@@ -149,7 +156,6 @@ class MatterController(AbstractController):
             await device_repository.save(device, discovery.id)
             await device_repository.update_id(discovery.id, device_id)
 
-        self._connected_device[discovery.id] = device_id
         await self.dependencies.output.controller_did_connect_device(self, device_id)
         self._subscription(device_id, node)
         return device_id
@@ -158,10 +164,6 @@ class MatterController(AbstractController):
         if not self._matter_client:
             raise MatterConnectionError("Matter client is not started")
 
-        for key, value in self._connected_device.items():
-            if value == device.id:
-                self._connected_device.pop(key)
-                break
         await self._matter_client.remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
@@ -405,17 +407,6 @@ class MatterController(AbstractController):
             node.instance_name or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else 'unknown'}"
         )
 
-        # If we already know this device, just make sure subscription is active.
-        if device_id := self._connected_device.get(discovery_id):
-            logging.info(f"[{self.name}] Re-discovered known device: {node.device_name or node.instance_name}")
-            async with self.dependencies.make_device_repository() as device_repository:
-                device = await device_repository.get(device_id, MatterDevice)
-                if not device:
-                    return
-                device_node = self._matter_client.get_node(device.node_id)
-                self._subscription(device_id, device_node)
-            return
-
         discovery = Discovery(
             id=discovery_id,
             integration=NonEmptyStr(self.name),
@@ -433,7 +424,6 @@ class MatterController(AbstractController):
         )
 
         self._majordom_descoveries[discovery_id] = discovery
-        self._connected_device[discovery_id] = None
         await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------

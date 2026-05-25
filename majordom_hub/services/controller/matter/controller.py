@@ -239,7 +239,7 @@ class MatterController(AbstractController):
             raise MatterUnexpectedError(f"Cluster {cluster_id} not found on endpoint {endpoint_id}")
 
         if parameter.integration_data.type is MatterParameterTypeEnum.command:
-            await self._execute_cluster_command(node, endpoint_id, cluster, parameter)
+            await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
         elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
             await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
 
@@ -247,7 +247,8 @@ class MatterController(AbstractController):
     # Private: command execution and attribute writing
     # -------------------------------------------------------------------------
 
-    async def _execute_cluster_command(self, node, endpoint_id: int, cluster, parameter: MatterParameter):
+    async def _execute_cluster_command(self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand):
+        logging.info(command.value)
         command_id = parameter.integration_data.command_id
         if command_id is None or command_id < 0:
             raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
@@ -259,7 +260,12 @@ class MatterController(AbstractController):
             if not issubclass(cmd_class, ClusterCommand):
                 continue
             if getattr(cmd_class, "command_id", -1) == command_id:
-                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class())
+                if isinstance(command.value, dict):
+                    await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**command.value))
+                elif command.value is not None:
+                    await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(command.value))
+                else:
+                    await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class())
                 return
 
     async def _write_cluster_attribute(self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand):

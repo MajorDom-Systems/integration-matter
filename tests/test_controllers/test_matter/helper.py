@@ -1,10 +1,10 @@
 import asyncio
+import pytest
+import random
 
 from uuid import UUID
 from aiohttp import ClientSession
 from matter_server.client import MatterClient
-
-from tests.test_controllers.test_matter.parameters import parameters
 
 from majordom_hub.config import matter_server_url
 from majordom_hub.services.controller.matter.model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameterState
@@ -29,10 +29,6 @@ async def create_matter_device(id: UUID, node_id: int, room_id: UUID):
         )
         device = await device_repo.state(id, MatterDeviceState)
         assert device
-        for parameter in parameters:
-            device.parameters.append(
-                MatterParameterState.parse_obj(parameter)
-            )
         await device_repo.save(device, id)
 
 async def get_device_integration_data(device_id: UUID) -> dict:
@@ -79,3 +75,43 @@ async def unpair_mvd(node_id: int | None = None):
     finally:
         await app.disconnect()
         await session.close()
+
+async def wait_for_discovery(async_client, headers, timeout: float = 15.0, interval: float = 0.5) -> dict:
+    """Poll discovery endpoint until at least one device appears or timeout is reached."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        r = await async_client.get('/v1/api/device/discoveries', headers=headers)
+        if r.status_code == 200 and r.json():
+            return r.json()
+        await asyncio.sleep(interval)
+    pytest.fail(f"No devices discovered within {timeout}s")
+
+def generate_value(field: dict):
+    """Generate a test value for a parameter field based on its data type and constraints."""
+    data_type = field.get("data_type")
+    valid_values = field.get("valid_values")
+    min_value = field.get("min_value")
+    max_value = field.get("max_value")
+
+    # If there are predefined valid values, pick one at random
+    if valid_values:
+        return int(random.choice(list(valid_values.keys())))
+
+    if data_type == "integer":
+        lo = int(min_value) if min_value is not None else 0
+        hi = int(max_value) if max_value is not None else 254
+        return random.randint(lo, hi)
+
+    if data_type == "float":
+        lo = float(min_value) if min_value is not None else 0.0
+        hi = float(max_value) if max_value is not None else 1.0
+        return random.uniform(lo, hi)
+
+    if data_type == "bool":
+        return random.choice([True, False])
+
+    if data_type == "string":
+        return "test"
+
+    # data_type == "none" or unknown
+    return None

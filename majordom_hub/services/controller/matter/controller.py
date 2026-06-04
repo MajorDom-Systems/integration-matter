@@ -9,7 +9,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.CHIPClusters import ChipClusters
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
-from chip.clusters.Objects import Identify, OperationalCredentials
+from chip.clusters.Objects import Identify
 from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import CommissionableNodeData, EventType
@@ -30,7 +30,13 @@ from majordom_hub.services.controller.framework.abstract_controller import Abstr
 
 from .exceptions import MatterConnectionError, MatterUnexpectedError
 from .mapper import MatterMapper
-from .matter_spec import ATTRIBUTE_MIN_STEPS, ATTRIBUTE_UNITS, SYSTEM_ATTRIBUTES, SYSTEM_CLUSTERS, MAIN_PARAMETER_BY_CLUSTER
+from .matter_spec import (
+    ATTRIBUTE_MIN_STEPS,
+    ATTRIBUTE_UNITS,
+    MAIN_PARAMETER_BY_CLUSTER,
+    SYSTEM_ATTRIBUTES,
+    SYSTEM_CLUSTERS,
+)
 from .model import (
     MatterDevice,
     MatterDeviceIntegrationData,
@@ -45,13 +51,7 @@ from .model import (
 class MatterController(AbstractController):
     _matter_client: MatterClient
     _matter_client_session: ClientSession
-
     _majordom_descoveries: dict[UUID, Discovery] = dict()
-
-    _matter_wifi_ssid: str
-    _matter_wifi_secret: str
-    _matter_thread_dataset: str
-
     _mapper = MatterMapper()
 
     # -------------------------------------------------------------------------
@@ -85,14 +85,12 @@ class MatterController(AbstractController):
         self._matter_client = MatterClient(matter_server_url, self._matter_client_session)
         await self._matter_client.connect()
 
-        # start_listening runs in background; we wait only until it signals ready.
         init_ready = asyncio.Event()
         asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready))
         await init_ready.wait()
 
         asyncio.create_task(self._matter_discovery_loop())
 
-        # Re-subscribe to attribute updates for devices that were already paired.
         device_nodes: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
             for device in await device_repository.get_all(self.name, MatterDevice):
@@ -103,11 +101,13 @@ class MatterController(AbstractController):
                     device.available = False
                     device.last_error = f"Device {device.name} is no longer connected to the Matter network"
                     await device_repository.save(device, device.id)
-            
+
             for node in self._matter_client.get_nodes():
                 if node.node_id in device_nodes:
                     continue
-                discovery_id = self._mapper.matter_id_to_uuid(f"{node.node_id}_{node.device_info.productName}")
+                discovery_id = self._mapper.matter_id_to_uuid(
+                    f"{node.node_id}_{node.device_info.productName}"
+                )
                 discovery = Discovery(
                     id=discovery_id,
                     integration=NonEmptyStr(self.name),
@@ -157,16 +157,17 @@ class MatterController(AbstractController):
             for endpoint_id, endpoint in node.endpoints.items():
                 for cluster_id, cluster in endpoint.clusters.items():
                     if hasattr(cluster, "Commands"):
-                        for parameter in self._parse_commands(device_id, endpoint_id, cluster_id, cluster):
+                        for parameter in self._parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
                             device.parameters.append(MatterParameterState(**parameter.__dict__, value=b""))
 
                     if hasattr(cluster, "Attributes"):
-                        for parameter in self._parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint):
+                        for parameter in self._parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint, node):
                             value = node.get_attribute_value(
                                 endpoint_id, cluster_id,
                                 parameter.integration_data.attribute_id,
                             )
                             device.parameters.append(MatterParameterState(**parameter.__dict__, value=value))
+
             device.main_parameter = self._get_main_parameter(device.id, node)
             await device_repository.save(device, discovery.id)
             await device_repository.update_id(discovery.id, device_id)
@@ -178,13 +179,11 @@ class MatterController(AbstractController):
     async def unpair(self, device: MatterDevice):
         if not self._matter_client:
             raise MatterConnectionError("Matter client is not started")
-
         await self._matter_client.remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
         if not self._matter_client:
             raise MatterConnectionError("Matter client is not started")
-
         command = Identify.Commands.Identify()
         node = self._matter_client.get_node(device.node_id)
         for endpoint_id in node.endpoints.keys():
@@ -247,8 +246,9 @@ class MatterController(AbstractController):
     # Private: command execution and attribute writing
     # -------------------------------------------------------------------------
 
-    async def _execute_cluster_command(self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand):
-        logging.info(command.value)
+    async def _execute_cluster_command(
+        self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
+    ):
         command_id = parameter.integration_data.command_id
         if command_id is None or command_id < 0:
             raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
@@ -259,16 +259,23 @@ class MatterController(AbstractController):
         for _, cmd_class in inspect.getmembers(cluster.Commands, inspect.isclass):
             if not issubclass(cmd_class, ClusterCommand):
                 continue
-            if getattr(cmd_class, "command_id", -1) == command_id:
-                if isinstance(command.value, dict):
-                    await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**command.value))
-                elif command.value is not None:
-                    await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(command.value))
-                else:
-                    await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class())
-                return
+            if getattr(cmd_class, "command_id", -1) != command_id:
+                continue
 
-    async def _write_cluster_attribute(self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand):
+            # Only send client-side commands
+            if not getattr(cmd_class, "is_client", True):
+                continue
+
+            if isinstance(command.value, dict):
+                data = self._mapper.parse_data_for_command(cmd_class, command.value)
+                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**data))
+            else:
+                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class())
+            return
+
+    async def _write_cluster_attribute(
+        self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand
+    ):
         if parameter.role != ParameterRole.control:
             raise MatterUnexpectedError(f"Parameter '{parameter.name}' is not writable")
 
@@ -280,19 +287,32 @@ class MatterController(AbstractController):
     # Private: node parsing
     # -------------------------------------------------------------------------
 
-    def _parse_commands(self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster) -> list[MatterParameter]:
+    def _parse_commands(
+        self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, node: MatterNode
+    ) -> list[MatterParameter]:
         params = []
+        visibility = ParameterVisibility.system if cluster_id in SYSTEM_CLUSTERS else ParameterVisibility.user
+
+        # Only process commands actually supported by this device
+        accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
 
         for name, command in inspect.getmembers(cluster.Commands, inspect.isclass):
             if not issubclass(command, ClusterCommand):
                 continue
 
+            # Skip response commands (server→client) — only keep client→server commands
+            if not getattr(command, "is_client", True):
+                continue
+
             command_id = getattr(command, "command_id", -1)
 
-            # Reflect on command dataclass fields to build typed argument descriptors.
-            # This lets the UI render the correct input widget for each argument.
+            # Skip commands not supported by this specific device
+            if accepted_command_ids and command_id not in accepted_command_ids:
+                continue
+
+            # Reflect on dataclass fields to build typed argument descriptors
             args = []
-            if isinstance(command, type) and is_dataclass(command):
+            if is_dataclass(command):
                 command_types = get_type_hints(command)
                 for field in fields(command):
                     if field.name.startswith("_"):
@@ -302,41 +322,45 @@ class MatterController(AbstractController):
                     data_type = ParameterDataType.none
                     valid_values = None
 
-                    # Unwrap Optional[X] / Union[X, None] to get the inner type.
+                    # Unwrap Optional[X] / Union[X, None] → take the first concrete type
                     if get_origin(field_type):
-                        field_type = get_args(field_type)[-1]
+                        args_ = [a for a in get_args(field_type) if a is not type(None)]
+                        field_type = args_[0] if args_ else field_type
 
                     if isinstance(field_type, type):
                         if issubclass(field_type, enum.Enum):
                             data_type = ParameterDataType.enum
-                            valid_values = {m.name: str(m.value) for m in field_type}
+                            # Keys are numeric values sent to device, values are display labels
+                            valid_values = {m.value: m.name for m in field_type if "unknown" not in m.name.lower()}
+                        elif issubclass(field_type, bool):
+                            data_type = ParameterDataType.bool
                         elif issubclass(field_type, int):
                             data_type = ParameterDataType.integer
+                        elif issubclass(field_type, float):
+                            data_type = ParameterDataType.decimal
                         elif issubclass(field_type, str):
                             data_type = ParameterDataType.string
 
-                    args.append(
-                        Parameter(
-                            id=self._mapper.matter_id_to_uuid(
-                                f"{device_id}_field_{endpoint_id}/{cluster_id}/{command_id}/{field.name}"
-                            ),
-                            name=field.name,
-                            data_type=data_type,
-                            unit=ParameterUnit.plain,
-                            role=ParameterRole.control,
-                            valid_values=valid_values,
-                            visibility=ParameterVisibility.setting,
-                            integration_data=None,
-                        )
-                    )
+                    args.append(Parameter(
+                        id=self._mapper.matter_id_to_uuid(
+                            f"{device_id}_field_{endpoint_id}/{cluster_id}/{command_id}/{field.name}"
+                        ),
+                        name=field.name,
+                        data_type=data_type,
+                        unit=ParameterUnit.plain,
+                        role=ParameterRole.control,
+                        valid_values=valid_values,
+                        visibility=ParameterVisibility.setting,
+                        integration_data=None,
+                    ))
 
             params.append(MatterParameter(
                 id=self._mapper.matter_id_to_uuid(f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}"),
                 name=name,
                 data_type=ParameterDataType.none,
                 role=ParameterRole.control,
-                visibility=ParameterVisibility.setting,
-                fields=args,
+                visibility=visibility,
+                fields=args or None,
                 integration_data=MatterParameterIntegrationData(
                     endpoint_id=endpoint_id,
                     cluster_id=cluster_id,
@@ -347,21 +371,33 @@ class MatterController(AbstractController):
 
         return params
 
-    def _parse_attributes(self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, endpoint) -> list[MatterParameter]:
+    def _parse_attributes(
+        self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, endpoint, node: MatterNode
+    ) -> list[MatterParameter]:
         params = []
+
+        # Only process attributes actually present on this device
+        supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
 
         for name, attribute in inspect.getmembers(cluster.Attributes, inspect.isclass):
             if not issubclass(attribute, ClusterAttributeDescriptor):
                 continue
 
             attribute_id = getattr(attribute, "attribute_id", -1)
+
+            # Skip system-level attributes (featureMap, clusterRevision, etc.)
+            if attribute_id in SYSTEM_ATTRIBUTES:
+                continue
+
+            # Skip attributes not present on this specific device
+            if supported_attribute_ids and attribute_id not in supported_attribute_ids:
+                continue
+
             value = endpoint.get_attribute_value(cluster_id, attribute_id)
 
-            # System clusters/attributes are internals not shown to the user.
-            # For non-system ones, the SDK tells us if the attribute is writable.
             visibility = ParameterVisibility.system
             role = ParameterRole.sensor
-            if cluster_id not in SYSTEM_CLUSTERS and attribute_id not in SYSTEM_ATTRIBUTES:
+            if cluster_id not in SYSTEM_CLUSTERS:
                 sdk_cluster = ChipClusters(None).GetClusterInfoById(cluster_id)
                 sdk_attribute = sdk_cluster.get("attributes", {}).get(attribute_id, {})
                 if sdk_attribute.get("writable"):
@@ -375,12 +411,15 @@ class MatterController(AbstractController):
             if attr_type and hasattr(attr_type, "Type") and isinstance(attr_type.Type, type):
                 t = attr_type.Type
                 if issubclass(t, (enum.Enum, enum.Flag)):
-                    valid_values = {m.name: str(m.value) for m in t}
+                    # Keys are numeric values sent to device, values are display labels
+                    valid_values = {m.value: m.name for m in t}
 
             min_value, max_value = self._mapper.get_min_max_value(attribute, value)
 
             params.append(MatterParameter(
-                id=self._mapper.matter_id_to_uuid(f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"),
+                id=self._mapper.matter_id_to_uuid(
+                    f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"
+                ),
                 name=name,
                 data_type=self._mapper.get_parameter_data_type_from_value(value),
                 visibility=visibility,
@@ -404,7 +443,9 @@ class MatterController(AbstractController):
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, command_id in MAIN_PARAMETER_BY_CLUSTER:
                 if cluster_id in endpoint.clusters:
-                    return self._mapper.matter_id_to_uuid(f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}")
+                    return self._mapper.matter_id_to_uuid(
+                        f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}"
+                    )
         return None
 
     # -------------------------------------------------------------------------
@@ -425,9 +466,9 @@ class MatterController(AbstractController):
 
     async def _async_matter_did_discover(self, node: CommissionableNodeData):
         discovery_id = self._mapper.matter_id_to_uuid(
-            node.instance_name or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else 'unknown'}"
+            node.instance_name
+            or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else 'unknown'}"
         )
-
         discovery = Discovery(
             id=discovery_id,
             integration=NonEmptyStr(self.name),
@@ -443,7 +484,6 @@ class MatterController(AbstractController):
             device_category=str(node.device_type),
             device_icon=None,
         )
-
         self._majordom_descoveries[discovery_id] = discovery
         await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 

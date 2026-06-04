@@ -6,8 +6,8 @@ import signal
 
 from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd
 
-@pytest.fixture(scope="function")
-def start_mvd():  # mvd - matter virtual device
+@pytest_asyncio.fixture(scope="function")
+async def start_mvd():  # mvd - matter virtual device
     proc = subprocess.Popen(
         [
             "mvd",
@@ -20,6 +20,7 @@ def start_mvd():  # mvd - matter virtual device
         preexec_fn=os.setsid
     )
     yield proc
+    await unpair_mvd()
     os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
 
 @pytest_asyncio.fixture(scope="function")

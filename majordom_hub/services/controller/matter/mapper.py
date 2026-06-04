@@ -2,6 +2,7 @@ from typing import Any
 from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from chip.tlv import TLVReader
+from chip.clusters.Types import NullValue
 
 from majordom_hub.schemas.device import CredentialsType
 from majordom_hub.schemas.parameter import ParameterDataType
@@ -68,3 +69,30 @@ class MatterMapper:
             return MIN_MAX_VALUE.get(tlv_type, (None, None))
         except Exception:
             return None, None
+
+
+    def parse_data_for_command(self, cmd_class: type, data: dict) -> dict:
+        from typing import Type, get_args, get_origin, get_type_hints, override
+        from dataclasses import fields, is_dataclass
+        import enum
+        hints = get_type_hints(cmd_class)
+        result = {}
+        for field in fields(cmd_class):
+            if field.name not in data:
+                continue
+            raw = data[field.name]
+            field_type = hints.get(field.name, field.type)
+
+            # Unwrap Optional / Union
+            if get_origin(field_type):
+                args = [a for a in get_args(field_type) if a is not type(None)]
+                field_type = args[0] if args else field_type
+
+            if raw is None:
+                result[field.name] = NullValue
+            elif isinstance(field_type, type) and issubclass(field_type, enum.Enum):
+                result[field.name] = field_type(int(raw))
+            else:
+                result[field.name] = raw
+
+        return result

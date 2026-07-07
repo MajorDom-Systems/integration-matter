@@ -98,12 +98,12 @@ def generate_value(field: dict):
         return int(random.choice(list(valid_values.keys())))
 
     if data_type == "integer":
-        lo = int(min_value) if min_value is not None else 0
-        hi = int(max_value) if max_value is not None else 254
+        lo = int(min_value) if min_value is not None else 1
+        hi = int(max_value) if max_value is not None else 1
         return random.randint(lo, hi)
 
     if data_type == "float":
-        lo = float(min_value) if min_value is not None else 0.0
+        lo = float(min_value) if min_value is not None else 1.0
         hi = float(max_value) if max_value is not None else 1.0
         return random.uniform(lo, hi)
 
@@ -115,3 +115,13 @@ def generate_value(field: dict):
 
     # data_type == "none" or unknown
     return None
+
+def flatten_exception_group(exception) -> list[Exception]:
+    exceptions = list()
+    if exception.exceptions:
+        for exc in exception.exceptions:
+            if hasattr(exc, "exceptions"):
+                exceptions.extend(flatten_exception_group(exc))
+            else:
+                exceptions.append(exc)
+    return exceptions

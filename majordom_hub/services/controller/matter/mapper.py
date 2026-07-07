@@ -92,6 +92,13 @@ class MatterMapper:
                 result[field.name] = NullValue
             elif isinstance(field_type, type) and issubclass(field_type, enum.Enum):
                 result[field.name] = field_type(int(raw))
+            elif field_type in (bytes, bytearray):
+                if isinstance(raw, str):
+                    result[field.name] = raw.encode('utf-8')
+                elif isinstance(raw, (list, tuple)):
+                    result[field.name] = bytes(raw)
+                else:
+                    result[field.name] = bytes(raw) if not isinstance(raw, (bytes, bytearray)) else raw
             else:
                 result[field.name] = raw
 

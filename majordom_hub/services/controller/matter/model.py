@@ -1,7 +1,8 @@
 import base64
 
 from enum import Enum
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+from uuid import UUID
 
 from majordom_hub.schemas.device import Device, Parameter, DeviceState, ParameterState
 from majordom_hub.schemas.base import Base
@@ -14,6 +15,7 @@ class MatterParameterTypeEnum(str, Enum):
 
 class MatterDeviceIntegrationData(Base):
     node_id: int
+    black_list: list[UUID] = Field(default_factory=list)
 
 
 class MatterParameterIntegrationData(BaseModel):

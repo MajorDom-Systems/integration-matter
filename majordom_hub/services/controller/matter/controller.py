@@ -13,6 +13,7 @@ from chip.clusters.Objects import Identify
 from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import CommissionableNodeData, EventType
+from matter_server.common.errors import UnknownError
 
 from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
@@ -28,7 +29,7 @@ from majordom_hub.schemas.parameter import (
 )
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
-from .exceptions import MatterConnectionError, MatterUnexpectedError
+from .exceptions import MatterConnectionError, MatterUnexpectedError, MatterUnsupportedParameter, MatterNotFoundParameter
 from .mapper import MatterMapper
 from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
@@ -123,6 +124,7 @@ class MatterController(AbstractController):
                 await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 
     async def stop(self):
+        self._majordom_descoveries.clear()
         if not self._matter_client_session or not self._matter_client:
             return
         await self._matter_client.disconnect()
@@ -220,27 +222,54 @@ class MatterController(AbstractController):
         await self.dependencies.output.controller_did_receive_device_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
-        if not self._matter_client:
-            raise MatterConnectionError("Matter client is not started")
+        try:
+            if not self._matter_client:
+                raise MatterConnectionError("Matter client is not started")
 
-        node = self._matter_client.get_node(device.node_id)
-        if not node:
-            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
+            node = self._matter_client.get_node(device.node_id)
+            if not node:
+                raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
 
-        endpoint_id = parameter.integration_data.endpoint_id
-        endpoint = node.endpoints.get(endpoint_id)
-        if not endpoint:
-            raise MatterUnexpectedError(f"Endpoint {endpoint_id} not found on node {node.node_id}")
+            endpoint_id = parameter.integration_data.endpoint_id
+            endpoint = node.endpoints.get(endpoint_id)
+            if not endpoint:
+                raise MatterUnexpectedError(f"Endpoint {endpoint_id} not found on node {node.node_id}")
 
-        cluster_id = parameter.integration_data.cluster_id
-        cluster = endpoint.clusters.get(cluster_id)
-        if not cluster:
-            raise MatterUnexpectedError(f"Cluster {cluster_id} not found on endpoint {endpoint_id}")
+            cluster_id = parameter.integration_data.cluster_id
+            cluster = endpoint.clusters.get(cluster_id)
+            if not cluster:
+                raise MatterUnexpectedError(f"Cluster {cluster_id} not found on endpoint {endpoint_id}")
 
-        if parameter.integration_data.type is MatterParameterTypeEnum.command:
-            await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
-        elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
-            await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
+            if parameter.integration_data.type is MatterParameterTypeEnum.command:
+                await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
+            elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+                await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
+        except UnknownError as e:
+            error = str(e)
+
+            error_map = {
+                "0x8b": (MatterNotFoundParameter, "not found on device"),
+                "0x81": (MatterUnsupportedParameter, "not supported by device"),
+            }
+
+            match = next(
+                ((exc, msg) for code, (exc, msg) in error_map.items() if code in error),
+                None
+            )
+            if match is None:
+                # Unknown/unmapped Matter error (e.g. Busy 0x9c) — don't swallow it
+                logging.error(f"Command '{parameter.name}' failed with unmapped error: {error}")
+                raise
+
+            exception_class, message = match
+            async with self.dependencies.make_device_repository() as device_repository:
+                device_state = await device_repository.state(device.id, MatterDeviceState)
+                device_state.parameters = [p for p in device_state.parameters if p.id != parameter.id]
+                device.integration_data.black_list.append(parameter.id)
+                await device_repository.save(device, device.id)
+
+            logging.error(f"Command '{parameter.name}' is {message} and will be removed")
+            raise exception_class(f"Command '{parameter.name}' failed: {message}")
 
     # -------------------------------------------------------------------------
     # Private: command execution and attribute writing
@@ -250,6 +279,7 @@ class MatterController(AbstractController):
         self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
     ):
         command_id = parameter.integration_data.command_id
+        time_requested_timeout = None
         if command_id is None or command_id < 0:
             raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
 
@@ -266,11 +296,13 @@ class MatterController(AbstractController):
             if not getattr(cmd_class, "is_client", True):
                 continue
 
+            if cluster.id == 0x00000101:  # DoorLock
+                time_requested_timeout=1000
             if isinstance(command.value, dict):
                 data = self._mapper.parse_data_for_command(cmd_class, command.value)
-                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**data))
+                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**data), timed_request_timeout_ms=time_requested_timeout)
             else:
-                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class())
+                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(), timed_request_timeout_ms=time_requested_timeout)
             return
 
     async def _write_cluster_attribute(
@@ -402,6 +434,8 @@ class MatterController(AbstractController):
                 sdk_attribute = sdk_cluster.get("attributes", {}).get(attribute_id, {})
                 if sdk_attribute.get("writable"):
                     visibility = ParameterVisibility.setting
+                    if cluster_id == 0x00000202:  # FanControl
+                        visibility = ParameterVisibility.user
                     role = ParameterRole.control
                 else:
                     visibility = ParameterVisibility.user

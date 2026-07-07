@@ -1,4 +1,7 @@
-from majordom_hub.schemas.parameter import ParameterUnit  # ParameterDataType, ParameterRole, ParameterVisibility  
+from majordom_hub.schemas.parameter import ParameterUnit  # ParameterDataType, ParameterRole, ParameterVisibility
+from chip.clusters.Types import NullValue
+from chip.clusters.Objects import Thermostat, KeypadInput
+
 
 
 from chip.tlv import (
@@ -116,27 +119,26 @@ ATTRIBUTE_MIN_STEPS: dict[tuple[int, int], int | float] = {
 }
 
 MAIN_PARAMETER_BY_CLUSTER = [
-    # Lighting & power
-    (0x0006, 0x0002),  # OnOff → Toggle
-    (0x0008, 0x0000),  # LevelControl → MoveToLevel
-    (0x0300, 0x0006),  # ColorControl → MoveToHueAndSaturation
-    # Covers & closures
-    (0x0102, 0x0005),  # WindowCovering → GoToLiftPercentage
-    (0x0101, 0x0000),  # DoorLock → LockDoor
-    # HVAC
-    (0x0201, 0x0000),  # Thermostat → SetpointRaiseLower
-    (0x0514, 0x0000),  # Thermostat User Interface Config — нет команд, пропуск
-    # Appliances (Matter 1.2+)
-    (0x0057, 0x0000),  # OperationalState → Pause (пылесос, стиралка, посудомойка)
-    (0x0054, 0x0000),  # RvcRunMode → ChangeToMode (робот-пылесос)
-    (0x0055, 0x0000),  # RvcCleanMode → ChangeToMode
-    (0x0059, 0x0000),  # DishwasherMode → ChangeToMode
-    (0x0051, 0x0000),  # LaundryWasherMode → ChangeToMode
-    (0x005C, 0x0000),  # MicrowaveOvenControl → SetCookingParameters
-    (0x0050, 0x0000),  # ModeSelect → ChangeToMode (универсальный режим)
-    # Energy
-    (0x0099, 0x0001),  # EnergyEvse → EnableCharging (EV зарядка)
-    # Media
-    (0x0506, 0x0000),  # MediaPlayback → Play
-    (0x0509, 0x0000),  # KeypadInput → SendKey
+    # cluster_id, command_id, default_params
+    (0x00000006, 0x00000002, None),  # OnOff.Toggle
+    (0x00000201, 0x00000000, {'mode': 1, 'amount': 5}),  # Thermostat.SetpointRaiseLower.Cool
+    (0x00000202, 0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
+    (0x00000056, 0x00000000, {'targetTemperature': 22, 'targetTemperatureLevel': 22}),  # TemperatureControl.SetTemperature
+    (0x00000060, 0x00000002, None),  # OperationalState.Start
+    (0x00000061, 0x00000003, None),  # RVCOperationalState.Resume
+    (0x0000005F, 0x00000001, {'timeToAdd': 30}),  # MicrowaveOvenControl.AddMoreTime
+    (0x00000050, 0x00000000, None),  # ModeSelect.ChangeToMode
+    (0x00000101, 0x00000001, {'PINCode': None}),  # DoorLock.UnlockDoor
+    # (0x0000005C, 0x00000000, None),  # SmokeCoAlarm.SelfTest
+    (0x00000506, 0x00000000, None),  # MediaPlayback.Start
+    (0x0000050A, 0x00000001, {'contentURL': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'}),  # ContentLauncher.LaunchURL
+    (0x00000509, 0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
+    (0x00000102, 0x00000002, None),  # WindowCovering.Stop
+    # (0x00000102, 0x00000000, None),  # WindowCovering.UpOrOpen
+    (0x00000104, 0x00000000, None),  # ClosureControl.Stop
+    (0x00000099, 0x00000001, None),  # EnergyEvse.Disable
+    (0x0000009E, 0x00000000, None),  # WaterHeaterMode.ChangeToMode
+    (0x00000553, 0x00000000, None),  # WebRTCVideoProvider.SolicitOffer
+    (0x00000556, 0x00000000, None),  # Chime.PlayChimeSound
+    (0x00000081, 0x00000000, None),  # ValveConfigurationAndControl.Open
 ]

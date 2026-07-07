@@ -475,8 +475,12 @@ class MatterController(AbstractController):
 
     def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> UUID | None:
         for endpoint_id, endpoint in node.endpoints.items():
-            for cluster_id, command_id in MAIN_PARAMETER_BY_CLUSTER:
+            for cluster_id, command_id, attr in MAIN_PARAMETER_BY_CLUSTER:
                 if cluster_id in endpoint.clusters:
+                    if cluster_id is 0x00000202:
+                        return self._mapper.matter_id_to_uuid(
+                            f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{command_id}"
+                        )
                     return self._mapper.matter_id_to_uuid(
                         f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}"
                     )

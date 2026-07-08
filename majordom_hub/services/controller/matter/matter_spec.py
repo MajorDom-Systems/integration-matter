@@ -1,7 +1,4 @@
-from majordom_hub.schemas.parameter import ParameterUnit  # ParameterDataType, ParameterRole, ParameterVisibility
-from chip.clusters.Types import NullValue
-from chip.clusters.Objects import Thermostat, KeypadInput
-
+from majordom_hub.schemas.parameter import ParameterUnit, ParameterDataType
 
 
 from chip.tlv import (
@@ -115,8 +112,16 @@ ATTRIBUTE_MIN_STEPS: dict[tuple[int, int], int | float] = {
     (0x0102, 0x0009): 0.01,             # CurrentPositionTiltPercentage (percent type, 1%)
     (0x0102, 0x000B): 0.01,             # TargetPositionLiftPercent100ths (percent100ths, 0.01%)
     (0x0102, 0x000C): 0.01,             # TargetPositionTiltPercent100ths (percent100ths, 0.01%)
-    
 }
+
+
+FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
+    bool: ParameterDataType.bool,
+    int: ParameterDataType.integer,
+    float: ParameterDataType.decimal,
+    str: ParameterDataType.string,
+}
+
 
 MAIN_PARAMETER_BY_CLUSTER = [
     # cluster_id, command_id, default_params

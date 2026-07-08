@@ -34,6 +34,7 @@ from .mapper import MatterMapper
 from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
     ATTRIBUTE_UNITS,
+    FIELD_TYPE_TO_DATA_TYPE,
     MAIN_PARAMETER_BY_CLUSTER,
     SYSTEM_ATTRIBUTES,
     SYSTEM_CLUSTERS,
@@ -364,14 +365,14 @@ class MatterController(AbstractController):
                             data_type = ParameterDataType.enum
                             # Keys are numeric values sent to device, values are display labels
                             valid_values = {m.value: m.name for m in field_type if "unknown" not in m.name.lower()}
-                        elif issubclass(field_type, bool):
-                            data_type = ParameterDataType.bool
-                        elif issubclass(field_type, int):
-                            data_type = ParameterDataType.integer
-                        elif issubclass(field_type, float):
-                            data_type = ParameterDataType.decimal
-                        elif issubclass(field_type, str):
-                            data_type = ParameterDataType.string
+                        else:
+                            # Exact match first, then subclass fallback (e.g. custom int wrappers)
+                            data_type = FIELD_TYPE_TO_DATA_TYPE.get(field_type)
+                            if data_type is None:
+                                for candidate_type, mapped_type in FIELD_TYPE_TO_DATA_TYPE.items():
+                                    if issubclass(field_type, candidate_type):
+                                        data_type = mapped_type
+                                        break
 
                     args.append(Parameter(
                         id=self._mapper.matter_id_to_uuid(

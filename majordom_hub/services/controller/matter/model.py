@@ -44,21 +44,6 @@ class MatterParameter(Parameter):
 
 class MatterParameterState(ParameterState):
     integration_data: MatterParameterIntegrationData
-
-    @field_validator("value", mode="before")
-    def convert_to_bytes(cls, v):
-        if v is None:
-            return b""
-
-        if isinstance(v, bytes):
-            return v
-
-        if isinstance(v, str):
-            try:
-                return base64.b64decode(v)
-            except Exception:
-                return v.encode()
-        return b""
         
 
 class MatterDeviceState(Device, DeviceState):

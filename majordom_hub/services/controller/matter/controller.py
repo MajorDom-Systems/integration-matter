@@ -165,11 +165,11 @@ class MatterController(AbstractController):
 
                     if hasattr(cluster, "Attributes"):
                         for parameter in self._parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint, node):
-                            value = node.get_attribute_value(
-                                endpoint_id, cluster_id,
-                                parameter.integration_data.attribute_id,
-                            )
-                            device.parameters.append(MatterParameterState(**parameter.__dict__, value=value))
+                            # value = node.get_attribute_value(
+                            #     endpoint_id, cluster_id,
+                            #     parameter.integration_data.attribute_id,
+                            # )
+                            device.parameters.append(MatterParameterState(**parameter.__dict__, value=b""))
 
             device.main_parameter = self._get_main_parameter(device.id, node)
             await device_repository.save(device, discovery.id)
@@ -367,12 +367,14 @@ class MatterController(AbstractController):
                             valid_values = {m.value: m.name for m in field_type if "unknown" not in m.name.lower()}
                         else:
                             # Exact match first, then subclass fallback (e.g. custom int wrappers)
-                            data_type = FIELD_TYPE_TO_DATA_TYPE.get(field_type)
-                            if data_type is None:
+                            matched = FIELD_TYPE_TO_DATA_TYPE.get(field_type)
+                            if matched is None:
                                 for candidate_type, mapped_type in FIELD_TYPE_TO_DATA_TYPE.items():
                                     if issubclass(field_type, candidate_type):
-                                        data_type = mapped_type
+                                        matched = mapped_type
                                         break
+                            if matched is not None:
+                                data_type = matched
 
                     args.append(Parameter(
                         id=self._mapper.matter_id_to_uuid(

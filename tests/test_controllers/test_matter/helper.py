@@ -76,7 +76,7 @@ async def unpair_mvd(node_id: int | None = None):
         await app.disconnect()
         await session.close()
 
-async def wait_for_discovery(async_client, headers, timeout: float = 15.0, interval: float = 0.5) -> dict:
+async def wait_for_discovery(async_client, headers, timeout: float = 5.0, interval: float = 0.5) -> dict:
     """Poll discovery endpoint until at least one device appears or timeout is reached."""
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:

@@ -136,7 +136,6 @@ MAIN_PARAMETER_BY_CLUSTER = [
     (0x00000101, 0x00000001, {'PINCode': None}),  # DoorLock.UnlockDoor
     # (0x0000005C, 0x00000000, None),  # SmokeCoAlarm.SelfTest
     (0x00000506, 0x00000000, None),  # MediaPlayback.Start
-    (0x0000050A, 0x00000001, {'contentURL': 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'}),  # ContentLauncher.LaunchURL
     (0x00000509, 0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
     (0x00000102, 0x00000002, None),  # WindowCovering.Stop
     # (0x00000102, 0x00000000, None),  # WindowCovering.UpOrOpen

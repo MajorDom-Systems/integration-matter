@@ -20,6 +20,7 @@ class MatterMapper:
         commissioning_mode: int | None = None,
         pairing_hint: int | None = None,
         pairing_instruction: str | None = None,
+        is_on_network: bool = False,
     ) -> CredentialsType:
         if not commissioning_mode or commissioning_mode == 0:
             return CredentialsType.none
@@ -29,6 +30,8 @@ class MatterMapper:
 
         # Bitmask checks based on the Matter spec pairing hint bitmap.
         # Each bit indicates a supported commissioning method.
+        if is_on_network:
+            return CredentialsType.code.with_mask("DDD-DD-DDD")
         if hint & (0x0004 | 0x0020 | 0x0008):
             return CredentialsType.qr
         if hint & (0x0002 | 0x0010) or "code" in instruction or "pin" in instruction:

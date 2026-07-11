@@ -517,6 +517,7 @@ class MatterController(AbstractController):
                 node.commissioning_mode,
                 node.pairing_hint,
                 node.pairing_instruction,
+                bool(node.addresses)
             ),
             expiration=None,
             transport=NonEmptyStr("IP" if node.addresses else "BLE"),

@@ -27,7 +27,8 @@ async def test_discover_paired(start_mvd, async_client, crud, get_user_bearer):
                 'category': 'test category',
                 'discovery_id': discovery_id,
                 'room_id': str(room.id),
-                'credentials': 'MT:Y.K9042C00KA0648G00'
+                # 'credentials': 'MT:Y.K9042C00KA0648G00'
+                'credentials': '20202021'
             }, headers=get_user_bearer(user.id))
         assert r.status_code == 200
         r = await async_client.get('/v1/api/device/discoveries', headers=get_user_bearer(user.id))
@@ -63,7 +64,9 @@ async def test_pair_device(start_mvd, async_client, crud, get_user_bearer):
             'category': 'test category',
             'discovery_id': discovery_id,
             'room_id': str(room.id),
-            'credentials': 'MT:Y.K9042C00KA0648G00'
+            # 'credentials': 'MT:Y.K9042C00KA0648G00'
+            'credentials': '20202021'
+
         }, headers=get_user_bearer(user.id))
         assert r.status_code == 200, r.json()
     finally:
@@ -88,7 +91,9 @@ async def test_control_all_attributes(start_all_mvd, async_client_ws_connect, as
         'category': 'test category',
         'discovery_id': discovery_id,
         'room_id': str(room.id),
-        'credentials': 'MT:Y.K9042C00KA0648G00'
+        # 'credentials': 'MT:Y.K9042C00KA0648G00'
+        'credentials': '20202021'
+
     }, headers=get_user_bearer(user.id))
     assert r.status_code == 200
     device_id = r.json()["id"]
@@ -169,7 +174,9 @@ async def test_control_all_commands(start_all_mvd, async_client_ws_connect, asyn
         'category': 'test category',
         'discovery_id': discovery_id,
         'room_id': str(room.id),
-        'credentials': 'MT:Y.K9042C00KA0648G00'
+        # 'credentials': 'MT:Y.K9042C00KA0648G00'
+        'credentials': '20202021'
+
     }, headers=get_user_bearer(user.id))
     assert r.status_code == 200
     device_id = r.json()["id"]
@@ -345,7 +352,9 @@ async def test_events(start_mvd, async_client, async_client_ws_connect, crud, ge
         'category': 'test category',
         'discovery_id': discovery_id,
         'room_id': str(room.id),
-        'credentials': 'MT:Y.K9042C00KA0648G00'
+        # 'credentials': 'MT:Y.K9042C00KA0648G00'
+        'credentials': '20202021'
+
     }, headers=get_user_bearer(user.id))
     assert r.status_code == 200
     device_id = r.json()["id"]

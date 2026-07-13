@@ -1,7 +1,6 @@
-import base64
-
+from typing import Any
 from enum import Enum
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from uuid import UUID
 
 from majordom_hub.schemas.device import Device, Parameter, DeviceState, ParameterState
@@ -25,6 +24,7 @@ class MatterParameterIntegrationData(BaseModel):
     command_id: int | None = None
     attribute_id: int | None = None
     type: MatterParameterTypeEnum  # "command" or "attribute"
+    default_arguments: dict[str, Any] | None = None
 
 
 class MatterDevice(Device):

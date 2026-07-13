@@ -165,13 +165,23 @@ class MatterController(AbstractController):
 
                     if hasattr(cluster, "Attributes"):
                         for parameter in self._parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint, node):
-                            # value = node.get_attribute_value(
-                            #     endpoint_id, cluster_id,
-                            #     parameter.integration_data.attribute_id,
-                            # )
-                            device.parameters.append(MatterParameterState(**parameter.__dict__, value=b""))
+                            value = node.get_attribute_value(
+                                endpoint_id, cluster_id,
+                                parameter.integration_data.attribute_id,
+                            )
+                            device.parameters.append(MatterParameterState(**parameter.__dict__).with_value(self._mapper.normalize_value(value)))
 
-            device.main_parameter = self._get_main_parameter(device.id, node)
+            main_parameter_id, default_value = self._get_main_parameter(device.id, node)
+            device.main_parameter = main_parameter_id
+            if main_parameter_id and default_value is not None:
+                main_parameter = next((p for p in device.parameters if p.id == main_parameter_id), None)
+                if main_parameter is None:
+                    device.main_parameter = None
+                elif main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+                    main_parameter.with_default_value(self._mapper.normalize_value(default_value))
+                else:
+                    main_parameter.integration_data.default_arguments = default_value
+
             await device_repository.save(device, discovery.id)
             await device_repository.update_id(discovery.id, device_id)
 
@@ -311,10 +321,22 @@ class MatterController(AbstractController):
     ):
         if parameter.role != ParameterRole.control:
             raise MatterUnexpectedError(f"Parameter '{parameter.name}' is not writable")
-
+    
         attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
-        if attribute_path in node.node_data.attributes:
-            await self._matter_client.write_attribute(node.node_id, attribute_path, command.value)
+        if attribute_path not in node.node_data.attributes:
+            return
+    
+        endpoint = node.endpoints[endpoint_id]
+        cluster = endpoint.clusters[cluster_id]
+        attribute_cls = next(
+            (a for _, a in inspect.getmembers(cluster.Attributes, inspect.isclass)
+             if issubclass(a, ClusterAttributeDescriptor)
+             and getattr(a, "attribute_id", -1) == parameter.integration_data.attribute_id),
+            None
+        )
+    
+        value = self._mapper.parse_data_for_attribute(attribute_cls, command.value) if attribute_cls else command.value
+        await self._matter_client.write_attribute(node.node_id, attribute_path, value)
 
     # -------------------------------------------------------------------------
     # Private: node parsing
@@ -458,7 +480,7 @@ class MatterController(AbstractController):
                     f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}"
                 ),
                 name=name,
-                data_type=self._mapper.get_parameter_data_type_from_value(value),
+                data_type=self._mapper.get_parameter_data_type_from_value(self._mapper.normalize_value(value)),
                 visibility=visibility,
                 min_value=min_value,
                 max_value=max_value,
@@ -476,18 +498,28 @@ class MatterController(AbstractController):
 
         return params
 
-    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> UUID | None:
+    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, dict | int | None]:
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, command_id, attr in MAIN_PARAMETER_BY_CLUSTER:
-                if cluster_id in endpoint.clusters:
-                    if cluster_id is 0x00000202:
-                        return self._mapper.matter_id_to_uuid(
-                            f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{command_id}"
-                        )
+                if cluster_id not in endpoint.clusters:
+                    continue
+
+                if cluster_id == 0x00000202:  # FanControl
+                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
+                    if supported_attribute_ids and command_id not in supported_attribute_ids:
+                        continue
                     return self._mapper.matter_id_to_uuid(
-                        f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}"
-                    )
-        return None
+                        f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{command_id}"
+                    ), attr
+
+                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
+                if accepted_command_ids and command_id not in accepted_command_ids:
+                    continue
+
+                return self._mapper.matter_id_to_uuid(
+                    f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}"
+                ), attr
+        return None, None
 
     # -------------------------------------------------------------------------
     # Private: discovery

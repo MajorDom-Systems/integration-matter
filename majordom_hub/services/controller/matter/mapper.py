@@ -1,8 +1,10 @@
-from typing import Any
-from uuid import NAMESPACE_DNS, UUID, uuid5
+import enum
 
+from chip.clusters.Types import Nullable, NullValue
 from chip.tlv import TLVReader
-from chip.clusters.Types import NullValue
+from dataclasses import fields, is_dataclass
+from typing import Any, get_args, get_origin, get_type_hints
+from uuid import NAMESPACE_DNS, UUID, uuid5
 
 from majordom_hub.schemas.device import CredentialsType
 from majordom_hub.schemas.parameter import ParameterDataType
@@ -41,22 +43,53 @@ class MatterMapper:
 
         return CredentialsType.none
 
+    def normalize_value(self, value: Any):
+        if value is NullValue or isinstance(value, Nullable):
+            return None
+        return value
+    
     def get_parameter_data_type_from_value(self, value: Any) -> ParameterDataType:
         """Infers ParameterDataType from a Python runtime value."""
+        # Matter SDK uses a special sentinel for "no value", not Python None
+        try:
+            if value is NullValue or isinstance(value, Nullable):
+                value = None
+                return ParameterDataType.none
+        except ImportError:
+            pass
+
         if value is None:
             return ParameterDataType.none
+
+        # bool must be checked before int because bool is a subclass of int.
         if isinstance(value, bool):
-            # bool must be checked before int because bool is a subclass of int.
             return ParameterDataType.bool
+
+        if isinstance(value, enum.Enum):
+            return ParameterDataType.enum
+
         if isinstance(value, int):
             return ParameterDataType.integer
+
         if isinstance(value, float):
             return ParameterDataType.decimal
+
         if isinstance(value, str):
             return ParameterDataType.string
+
         if isinstance(value, (bytes, bytearray, memoryview)):
             return ParameterDataType.data
-        return ParameterDataType.none
+
+        if is_dataclass(value) or isinstance(value, dict):
+            return ParameterDataType.struct
+
+        if isinstance(value, (list, tuple, set)):
+            return ParameterDataType.struct
+
+        raise ValueError(
+            f"Cannot infer ParameterDataType for value of type {type(value)!r}: {value!r}. "
+            f"Extend get_parameter_data_type_from_value to handle this type explicitly."
+        )
 
     def get_min_max_value(self, attribute, value) -> tuple[int | None, int | None]:
         """
@@ -75,8 +108,6 @@ class MatterMapper:
 
 
     def parse_data_for_command(self, cmd_class: type, data: dict) -> dict:
-        from typing import Type, get_args, get_origin, get_type_hints, override
-        from dataclasses import fields, is_dataclass
         import enum
         hints = get_type_hints(cmd_class)
         result = {}
@@ -106,3 +137,27 @@ class MatterMapper:
                 result[field.name] = raw
 
         return result
+
+    def parse_data_for_attribute(self, attribute_cls: type, raw: Any) -> Any:
+        if raw is None:
+            return NullValue
+
+        attr_type = getattr(attribute_cls, "attribute_type", None)
+        field_type = getattr(attr_type, "Type", None) if attr_type else None
+
+        # Unwrap Optional[X] / Union[X, None] — same as in parse_data_for_command
+        if get_origin(field_type):
+            args = [a for a in get_args(field_type) if a is not type(None)]
+            field_type = args[0] if args else field_type
+
+        if isinstance(field_type, type) and issubclass(field_type, enum.Enum):
+            return field_type(int(raw))
+
+        if field_type in (bytes, bytearray):
+            if isinstance(raw, str):
+                return raw.encode('utf-8')
+            if isinstance(raw, (list, tuple)):
+                return bytes(raw)
+            return bytes(raw) if not isinstance(raw, (bytes, bytearray)) else raw
+
+        return raw

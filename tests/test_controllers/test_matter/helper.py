@@ -87,22 +87,20 @@ async def wait_for_discovery(async_client, headers, timeout: float = 10.0, inter
     pytest.fail(f"No devices discovered within {timeout}s")
 
 def generate_value(field: dict):
-    """Generate a test value for a parameter field based on its data type and constraints."""
     data_type = field.get("data_type")
     valid_values = field.get("valid_values")
     min_value = field.get("min_value")
     max_value = field.get("max_value")
 
-    # If there are predefined valid values, pick one at random
     if valid_values:
         return int(random.choice(list(valid_values.keys())))
 
-    if data_type == "integer":
+    if data_type in ("integer", "enum"):
         lo = int(min_value) if min_value is not None else 1
         hi = int(max_value) if max_value is not None else 1
         return random.randint(lo, hi)
 
-    if data_type == "float":
+    if data_type == "decimal":
         lo = float(min_value) if min_value is not None else 1.0
         hi = float(max_value) if max_value is not None else 1.0
         return random.uniform(lo, hi)
@@ -113,8 +111,12 @@ def generate_value(field: dict):
     if data_type == "string":
         return "test"
 
-    # data_type == "none" or unknown
-    return None
+    if data_type == "none":
+        return None
+
+    # unknown data_type without valid_values/min/max — should not happen for control attributes;
+    # fail loudly instead of silently sending None
+    raise ValueError(f"Cannot generate test value for field {field.get('name')} with data_type={data_type}")
 
 def flatten_exception_group(exception) -> list[Exception]:
     exceptions = list()

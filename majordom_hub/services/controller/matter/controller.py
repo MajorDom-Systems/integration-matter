@@ -68,6 +68,7 @@ class MatterController(AbstractController):
 
     async def start(self):
         self._background_tasks: list[asyncio.Task] = []
+        self._node_availability: dict[UUID, bool] = {}
         self._matter_client_session = ClientSession()
         self._matter_client = MatterClient(matter_server_url, self._matter_client_session)
         await self._matter_client.connect()
@@ -420,6 +421,17 @@ class MatterController(AbstractController):
                         attribute_path,
                     )
 
+        # node.available flips when the device drops off/rejoins the Matter fabric while
+        # the Hub keeps running (not just at Hub startup) — NODE_UPDATED fires on that and
+        # other node-info changes, so track the last known value and only act on a real
+        # transition instead of re-signalling on every unrelated update.
+        self._node_availability[device_id] = node.available
+        self._matter_client.subscribe_events(
+            self._make_availability_callback(device_id),
+            EventType.NODE_UPDATED,
+            node.node_id,
+        )
+
     def _make_callback(self, device_id: UUID, parameter_id: UUID):
         def callback(event_type, new_value):
             event = DeviceParameterChangedEvent(
@@ -430,4 +442,17 @@ class MatterController(AbstractController):
             asyncio.create_task(
                 self.dependencies.output.controller_did_receive_device_events(self, [event])
             )
+        return callback
+
+    def _make_availability_callback(self, device_id: UUID):
+        def callback(event_type, updated_node: MatterNode):
+            was_available = self._node_availability.get(device_id)
+            is_available = updated_node.available
+            if is_available == was_available:
+                return
+            self._node_availability[device_id] = is_available
+            if is_available:
+                asyncio.create_task(self.dependencies.output.controller_did_connect_device(self, device_id))
+            else:
+                asyncio.create_task(self.dependencies.output.controller_did_lose_device(self, device_id))
         return callback

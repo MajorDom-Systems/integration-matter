@@ -1,14 +1,11 @@
 import asyncio
 import contextlib
-import enum
 import inspect
 import logging
-from dataclasses import fields, is_dataclass
-from typing import Type, get_args, get_origin, get_type_hints, override
+from typing import Type, override
 from uuid import UUID
 
 from aiohttp import ClientSession
-from chip.clusters.CHIPClusters import ChipClusters
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import Identify
 from matter_server.client import MatterClient
@@ -21,31 +18,17 @@ from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery
-from majordom_hub.schemas.parameter import (
-    Parameter,
-    ParameterDataType,
-    ParameterRole,
-    ParameterUnit,
-    ParameterVisibility,
-)
+from majordom_hub.schemas.parameter import ParameterRole
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
 from .exceptions import MatterConnectionError, MatterUnexpectedError, MatterUnsupportedParameter, MatterNotFoundParameter
 from .mapper import MatterMapper
-from .matter_spec import (
-    ATTRIBUTE_MIN_STEPS,
-    ATTRIBUTE_UNITS,
-    FIELD_TYPE_TO_DATA_TYPE,
-    MAIN_PARAMETER_BY_CLUSTER,
-    SYSTEM_ATTRIBUTES,
-    SYSTEM_CLUSTERS,
-)
+from .matter_spec import MAIN_PARAMETER_BY_CLUSTER
 from .model import (
     MatterDevice,
     MatterDeviceIntegrationData,
     MatterDeviceState,
     MatterParameter,
-    MatterParameterIntegrationData,
     MatterParameterState,
     MatterParameterTypeEnum,
 )
@@ -187,11 +170,11 @@ class MatterController(AbstractController):
             for endpoint_id, endpoint in node.endpoints.items():
                 for cluster_id, cluster in endpoint.clusters.items():
                     if hasattr(cluster, "Commands"):
-                        for parameter in self._parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
+                        for parameter in self._mapper.parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
                             device.parameters.append(MatterParameterState(**parameter.__dict__, value=b""))
 
                     if hasattr(cluster, "Attributes"):
-                        for parameter in self._parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint, node):
+                        for parameter in self._mapper.parse_attributes(device_id, endpoint_id, cluster_id, cluster, endpoint, node):
                             value = node.get_attribute_value(
                                 endpoint_id, cluster_id,
                                 parameter.integration_data.attribute_id,
@@ -351,169 +334,6 @@ class MatterController(AbstractController):
     # -------------------------------------------------------------------------
     # Private: node parsing
     # -------------------------------------------------------------------------
-
-    def _parse_commands(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, node: MatterNode
-    ) -> list[MatterParameter]:
-        params = []
-        visibility = ParameterVisibility.system if cluster_id in SYSTEM_CLUSTERS else ParameterVisibility.user
-
-        # Only process commands actually supported by this device
-        accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
-
-        for name, command in inspect.getmembers(cluster.Commands, inspect.isclass):
-            if not issubclass(command, ClusterCommand):
-                continue
-
-            # Skip response commands (server→client) — only keep client→server commands
-            if not getattr(command, "is_client", True):
-                continue
-
-            command_id = getattr(command, "command_id", -1)
-
-            # Skip commands not supported by this specific device
-            if accepted_command_ids and command_id not in accepted_command_ids:
-                continue
-
-            # Reflect on dataclass fields to build typed argument descriptors
-            args = []
-            if is_dataclass(command):
-                command_types = get_type_hints(command)
-                for field in fields(command):
-                    if field.name.startswith("_"):
-                        continue
-
-                    field_type = command_types.get(field.name, field.type)
-                    data_type = ParameterDataType.none
-                    valid_values = None
-
-                    # Unwrap Optional[X] / Union[X, None] → take the first concrete type
-                    if get_origin(field_type):
-                        args_ = [a for a in get_args(field_type) if a is not type(None)]
-                        field_type = args_[0] if args_ else field_type
-
-                    if isinstance(field_type, type):
-                        if issubclass(field_type, enum.Enum):
-                            data_type = ParameterDataType.enum
-                            # Keys are numeric values sent to device, values are display labels
-                            valid_values = {m.value: m.name for m in field_type if "unknown" not in m.name.lower()}
-                        else:
-                            # Exact match first, then subclass fallback (e.g. custom int wrappers)
-                            matched = FIELD_TYPE_TO_DATA_TYPE.get(field_type)
-                            if matched is None:
-                                for candidate_type, mapped_type in FIELD_TYPE_TO_DATA_TYPE.items():
-                                    if issubclass(field_type, candidate_type):
-                                        matched = mapped_type
-                                        break
-                            if matched is not None:
-                                data_type = matched
-
-                    args.append(Parameter(
-                        id=self._mapper.command_field_uuid(device_id, endpoint_id, cluster_id, command_id, field.name),
-                        name=field.name,
-                        data_type=data_type,
-                        unit=ParameterUnit.plain,
-                        role=ParameterRole.control,
-                        valid_values=valid_values,
-                        visibility=ParameterVisibility.setting,
-                        integration_data=None,
-                    ))
-
-            params.append(MatterParameter(
-                id=self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, command_id),
-                name=name,
-                data_type=ParameterDataType.none,
-                role=ParameterRole.control,
-                visibility=visibility,
-                fields=args or None,
-                integration_data=MatterParameterIntegrationData(
-                    endpoint_id=endpoint_id,
-                    cluster_id=cluster_id,
-                    command_id=command_id,
-                    type=MatterParameterTypeEnum.command,
-                ),
-            ))
-
-        return params
-
-    def _parse_attributes(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, endpoint, node: MatterNode
-    ) -> list[MatterParameter]:
-        params = []
-
-        # Only process attributes actually present on this device
-        supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
-
-        for name, attribute in inspect.getmembers(cluster.Attributes, inspect.isclass):
-            if not issubclass(attribute, ClusterAttributeDescriptor):
-                continue
-
-            attribute_id = getattr(attribute, "attribute_id", -1)
-
-            # Skip system-level attributes (featureMap, clusterRevision, etc.)
-            if attribute_id in SYSTEM_ATTRIBUTES:
-                continue
-
-            # Skip attributes not present on this specific device
-            if supported_attribute_ids and attribute_id not in supported_attribute_ids:
-                continue
-
-            value = endpoint.get_attribute_value(cluster_id, attribute_id)
-
-            visibility = ParameterVisibility.system
-            role = ParameterRole.sensor
-            if cluster_id not in SYSTEM_CLUSTERS:
-                sdk_cluster = ChipClusters(None).GetClusterInfoById(cluster_id)
-                sdk_attribute = sdk_cluster.get("attributes", {}).get(attribute_id, {})
-                if sdk_attribute.get("writable"):
-                    visibility = ParameterVisibility.setting
-                    if cluster_id == 0x00000202:  # FanControl
-                        visibility = ParameterVisibility.user
-                    role = ParameterRole.control
-                else:
-                    visibility = ParameterVisibility.user
-
-            valid_values = None
-            attr_type = attribute.attribute_type
-            if attr_type and hasattr(attr_type, "Type") and isinstance(attr_type.Type, type):
-                t = attr_type.Type
-                if issubclass(t, (enum.Enum, enum.Flag)):
-                    # Keys are numeric values sent to device, values are display labels
-                    valid_values = {m.value: m.name for m in t}
-
-            min_value, max_value = self._mapper.get_min_max_value(attribute, value)
-
-            try:
-                data_type = self._mapper.get_parameter_data_type_from_value(self._mapper.normalize_value(value))
-            except ValueError:
-                # Value type isn't one we know how to represent yet. Skip just this attribute
-                # rather than aborting the whole pairing — the device stays usable, only this
-                # one parameter is unavailable.
-                logging.warning(
-                    f"Could not infer data type for {name} (cluster {cluster_id:#x}, attribute {attribute_id:#x}); skipping parameter"
-                )
-                continue
-
-            params.append(MatterParameter(
-                id=self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, attribute_id),
-                name=name,
-                data_type=data_type,
-                visibility=visibility,
-                min_value=min_value,
-                max_value=max_value,
-                valid_values=valid_values,
-                min_step=ATTRIBUTE_MIN_STEPS.get((cluster_id, attribute_id)),
-                unit=ATTRIBUTE_UNITS.get((cluster_id, attribute_id), ParameterUnit.plain),
-                role=role,
-                integration_data=MatterParameterIntegrationData(
-                    endpoint_id=endpoint_id,
-                    cluster_id=cluster_id,
-                    attribute_id=attribute_id,
-                    type=MatterParameterTypeEnum.attribute,
-                ),
-            ))
-
-        return params
 
     def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, dict | int | None]:
         for endpoint_id, endpoint in node.endpoints.items():

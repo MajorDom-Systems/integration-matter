@@ -17,7 +17,7 @@ from majordom_hub.config import matter_server_url
 from majordom_hub.schemas.automation.events import DeviceParameterChangedEvent
 from majordom_hub.schemas.base import NonEmptyStr
 from majordom_hub.schemas.command import DeviceCommand
-from majordom_hub.schemas.device import CredentialsType, CredentialsValue, Discovery
+from majordom_hub.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_hub.schemas.parameter import ParameterRole
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
 
@@ -97,7 +97,7 @@ class MatterController(AbstractController):
                 discovery = Discovery(
                     id=discovery_id,
                     integration=NonEmptyStr(self.name),
-                    credentials=CredentialsType.none,
+                    expected_credentials_options=[CredentialsType.none],
                     expiration=None,
                     transport=NonEmptyStr("IP"),
                     device_name=NonEmptyStr(node.device_info.productName or "Unknown"),
@@ -146,21 +146,27 @@ class MatterController(AbstractController):
     # Public device operations
     # -------------------------------------------------------------------------
 
-    async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
+    async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None):
         self._require_matter_client()
 
-        if discovery.credentials is CredentialsType.qr:
-            commission_node = await self._matter_client.commission_with_code(str(credentials))
-        elif discovery.credentials is CredentialsType.code:
+        if not credentials or credentials.type not in discovery.expected_credentials_options:
+            raise MatterUnexpectedError(
+                f"Credentials type {credentials.type if credentials else None!r} is not one of the "
+                f"types this discovery advertised: {discovery.expected_credentials_options}"
+            )
+
+        if credentials.type is CredentialsType.qr:
+            commission_node = await self._matter_client.commission_with_code(str(credentials.value))
+        elif credentials.type is CredentialsType.code:
             if discovery.transport == "BLE":
                 # commission_on_network only works for devices already reachable over IP
                 # (matter-server's own docstring: "for advanced usecases only, use
                 # commission_with_code for regular commissioning") — a BLE-discovered
                 # device has no IP yet, so it must go through commission_with_code instead,
                 # which chip-tool routes over BLE automatically based on the code.
-                commission_node = await self._matter_client.commission_with_code(str(credentials))
+                commission_node = await self._matter_client.commission_with_code(str(credentials.value))
             else:
-                commission_node = await self._matter_client.commission_on_network(int(credentials))
+                commission_node = await self._matter_client.commission_on_network(int(credentials.value))
         else:
             raise MatterUnexpectedError("This credentials type is not supported")
 
@@ -387,7 +393,7 @@ class MatterController(AbstractController):
         discovery = Discovery(
             id=discovery_id,
             integration=NonEmptyStr(self.name),
-            credentials=self._mapper.define_credentials_type(
+            expected_credentials_options=self._mapper.define_credentials_options(
                 node.commissioning_mode,
                 node.pairing_hint,
                 node.pairing_instruction,

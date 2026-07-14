@@ -55,31 +55,34 @@ class MatterMapper:
     def command_field_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_name: str) -> UUID:
         return self.matter_id_to_uuid(f"{device_id}_field_{endpoint_id}/{cluster_id}/{command_id}/{field_name}")
 
-    def define_credentials_type(
+    def define_credentials_options(
         self,
         commissioning_mode: int | None = None,
         pairing_hint: int | None = None,
         pairing_instruction: str | None = None,
         is_on_network: bool = False,
-    ) -> CredentialsType:
+    ) -> list[CredentialsType]:
+        """Every credentials type this node's pairing hint bitmap says it supports —
+        a device can advertise more than one simultaneously (e.g. QR and a manual code),
+        so this returns all of them instead of picking just one."""
         if not commissioning_mode or commissioning_mode == 0:
-            return CredentialsType.none
+            return [CredentialsType.none]
 
         hint = pairing_hint or 0
         instruction = (pairing_instruction or "").lower()
+        options: list[CredentialsType] = []
 
         # Bitmask checks based on the Matter spec pairing hint bitmap.
-        # Each bit indicates a supported commissioning method.
         if is_on_network:
-            return CredentialsType.code.with_mask("DDD-DD-DDD")
+            options.append(CredentialsType.code.with_mask("DDD-DD-DDD"))
         if hint & (0x0004 | 0x0020 | 0x0008):
-            return CredentialsType.qr
-        if hint & (0x0002 | 0x0010) or "code" in instruction or "pin" in instruction:
-            return CredentialsType.code.with_mask("DDD-DD-DDD")
+            options.append(CredentialsType.qr)
+        if (hint & (0x0002 | 0x0010) or "code" in instruction or "pin" in instruction) and CredentialsType.code not in options:
+            options.append(CredentialsType.code.with_mask("DDD-DD-DDD"))
         if hint & 0x0001:
-            return CredentialsType.power_cycle
+            options.append(CredentialsType.power_cycle)
 
-        return CredentialsType.none
+        return options or [CredentialsType.none]
 
     def normalize_value(self, value: Any):
         if value is NullValue or isinstance(value, Nullable):

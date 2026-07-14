@@ -216,7 +216,7 @@ async def test_discovery_and_pairing(power_on_and_settle, async_client, async_cl
         "category": "test category",
         "room_id": room.id.hex,
         "discovery_id": discovery_id,
-        "credentials": "20202021",  # TODO(hardware): the DUT's actual pairing code
+        "credentials": {"type": "code", "value": "20202021"},  # TODO(hardware): the DUT's actual pairing code/type
     }
 
     async with async_client_ws_connect(user.id, timeout=60) as ws:

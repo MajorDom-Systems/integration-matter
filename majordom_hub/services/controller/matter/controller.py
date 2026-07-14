@@ -144,12 +144,26 @@ class MatterController(AbstractController):
         await self._matter_client_session.close()
 
     # -------------------------------------------------------------------------
+    # Private: guards
+    # -------------------------------------------------------------------------
+
+    def _require_matter_client(self) -> MatterClient:
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+        return self._matter_client
+
+    def _require_node(self, device: MatterDevice) -> MatterNode:
+        node = self._require_matter_client().get_node(device.node_id)
+        if not node:
+            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
+        return node
+
+    # -------------------------------------------------------------------------
     # Public device operations
     # -------------------------------------------------------------------------
 
     async def pair_device(self, discovery: Discovery, credentials: CredentialsValue | None):
-        if not self._matter_client:
-            raise MatterConnectionError("Matter client is not started")
+        self._require_matter_client()
 
         if discovery.credentials is CredentialsType.qr:
             commission_node = await self._matter_client.commission_with_code(str(credentials))
@@ -202,26 +216,17 @@ class MatterController(AbstractController):
         return device_id
 
     async def unpair(self, device: MatterDevice):
-        if not self._matter_client:
-            raise MatterConnectionError("Matter client is not started")
-        await self._matter_client.remove_node(device.node_id)
+        await self._require_matter_client().remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
-        if not self._matter_client:
-            raise MatterConnectionError("Matter client is not started")
         command = Identify.Commands.Identify()
-        node = self._matter_client.get_node(device.node_id)
+        node = self._require_node(device)
         for endpoint_id in node.endpoints.keys():
             if node.has_cluster(3, endpoint_id):
                 await self._matter_client.send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
-        if not self._matter_client:
-            raise MatterConnectionError("Matter client is not started")
-
-        node = self._matter_client.get_node(device.node_id)
-        if not node:
-            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
+        node = self._require_node(device)
 
         events = []
         for endpoint_id, endpoint in node.endpoints.items():
@@ -244,12 +249,7 @@ class MatterController(AbstractController):
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
         try:
-            if not self._matter_client:
-                raise MatterConnectionError("Matter client is not started")
-
-            node = self._matter_client.get_node(device.node_id)
-            if not node:
-                raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
+            node = self._require_node(device)
 
             endpoint_id = parameter.integration_data.endpoint_id
             endpoint = node.endpoints.get(endpoint_id)
@@ -483,10 +483,21 @@ class MatterController(AbstractController):
 
             min_value, max_value = self._mapper.get_min_max_value(attribute, value)
 
+            try:
+                data_type = self._mapper.get_parameter_data_type_from_value(self._mapper.normalize_value(value))
+            except ValueError:
+                # Value type isn't one we know how to represent yet. Skip just this attribute
+                # rather than aborting the whole pairing — the device stays usable, only this
+                # one parameter is unavailable.
+                logging.warning(
+                    f"Could not infer data type for {name} (cluster {cluster_id:#x}, attribute {attribute_id:#x}); skipping parameter"
+                )
+                continue
+
             params.append(MatterParameter(
                 id=self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, attribute_id),
                 name=name,
-                data_type=self._mapper.get_parameter_data_type_from_value(self._mapper.normalize_value(value)),
+                data_type=data_type,
                 visibility=visibility,
                 min_value=min_value,
                 max_value=max_value,

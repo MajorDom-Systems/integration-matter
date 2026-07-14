@@ -194,6 +194,7 @@ class MatterController(AbstractController):
                                 endpoint_id, cluster_id,
                                 parameter.integration_data.attribute_id,
                             )
+                            value = self._mapper.apply_attribute_scale(cluster_id, parameter.integration_data.attribute_id, value)
                             device.parameters.append(MatterParameterState(**parameter.__dict__).with_value(self._mapper.normalize_value(value)))
 
             main_parameter_id, default_value = self._get_main_parameter(device.id, node)
@@ -236,11 +237,12 @@ class MatterController(AbstractController):
                         continue
                     attribute_id = getattr(attribute, "attribute_id", -1)
                     value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
+                    value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                     parameter_id = self._mapper.attribute_parameter_uuid(device.id, endpoint_id, cluster_id, attribute_id)
                     events.append(DeviceParameterChangedEvent(
                         device_id=device.id,
                         parameter_id=parameter_id,
-                        value=value if isinstance(value, str | int | bool) else None,
+                        value=value if isinstance(value, str | int | float | bool) else None,
                     ))
 
         await self.dependencies.output.controller_did_receive_device_events(self, events)
@@ -429,7 +431,7 @@ class MatterController(AbstractController):
                     attribute_path = f"{endpoint_id}/{cluster_id}/{attribute.attribute_id}"
                     parameter_id = self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, attribute.attribute_id)
                     self._matter_client.subscribe_events(
-                        self._make_callback(device_id, parameter_id),
+                        self._make_callback(device_id, parameter_id, cluster_id, attribute.attribute_id),
                         EventType.ATTRIBUTE_UPDATED,
                         node.node_id,
                         attribute_path,
@@ -446,12 +448,12 @@ class MatterController(AbstractController):
             node.node_id,
         )
 
-    def _make_callback(self, device_id: UUID, parameter_id: UUID):
+    def _make_callback(self, device_id: UUID, parameter_id: UUID, cluster_id: int, attribute_id: int):
         def callback(event_type, new_value):
             event = DeviceParameterChangedEvent(
                 device_id=device_id,
                 parameter_id=parameter_id,
-                value=new_value,
+                value=self._mapper.apply_attribute_scale(cluster_id, attribute_id, new_value),
             )
             asyncio.create_task(
                 self.dependencies.output.controller_did_receive_device_events(self, [event])

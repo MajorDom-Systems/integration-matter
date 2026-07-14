@@ -23,6 +23,7 @@ from majordom_hub.schemas.parameter import (
 
 from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
+    ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
     FIELD_TYPE_TO_DATA_TYPE,
     MIN_MAX_VALUE,
@@ -131,6 +132,19 @@ class MatterMapper:
             f"Cannot infer ParameterDataType for value of type {type(value)!r}: {value!r}. "
             f"Extend get_parameter_data_type_from_value to handle this type explicitly."
         )
+
+    def apply_attribute_scale(self, cluster_id: int, attribute_id: int, value: Any) -> Any:
+        """Converts a raw Matter attribute value into ATTRIBUTE_UNITS' base unit, per ATTRIBUTE_SCALE.
+        Unwraps the cumulative-energy struct's `energy` field before scaling, since that's the
+        only scaled attribute whose SDK value isn't already a plain number."""
+        scale = ATTRIBUTE_SCALE.get((cluster_id, attribute_id))
+        if scale is None:
+            return value
+        if is_dataclass(value) and hasattr(value, "energy"):
+            value = value.energy
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value * scale
+        return value
 
     def get_min_max_value(self, attribute, value) -> tuple[int | None, int | None]:
         """
@@ -313,7 +327,7 @@ class MatterMapper:
             if supported_attribute_ids and attribute_id not in supported_attribute_ids:
                 continue
 
-            value = endpoint.get_attribute_value(cluster_id, attribute_id)
+            raw_value = endpoint.get_attribute_value(cluster_id, attribute_id)
 
             visibility = ParameterVisibility.system
             role = ParameterRole.sensor
@@ -336,7 +350,12 @@ class MatterMapper:
                     # Keys are numeric values sent to device, values are display labels
                     valid_values = {m.value: m.name for m in t}
 
-            min_value, max_value = self.get_min_max_value(attribute, value)
+            min_value, max_value = self.get_min_max_value(attribute, raw_value)
+            scale = ATTRIBUTE_SCALE.get((cluster_id, attribute_id))
+            if scale is not None:
+                min_value = min_value * scale if min_value is not None else None
+                max_value = max_value * scale if max_value is not None else None
+            value = self.apply_attribute_scale(cluster_id, attribute_id, raw_value)
 
             try:
                 data_type = self.get_parameter_data_type_from_value(self.normalize_value(value))

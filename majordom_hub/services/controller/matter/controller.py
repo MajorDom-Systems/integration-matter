@@ -179,6 +179,7 @@ class MatterController(AbstractController):
         async with self.dependencies.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, MatterDeviceState)
             assert device
+            device.id = device_id
 
             if not device.integration_data:
                 device.integration_data = MatterDeviceIntegrationData(node_id=node.node_id)
@@ -209,7 +210,6 @@ class MatterController(AbstractController):
                     main_parameter.integration_data.default_arguments = default_value
 
             await device_repository.save(device, discovery.id)
-            await device_repository.update_id(discovery.id, device_id)
 
         await self.dependencies.output.controller_did_connect_device(self, device_id)
         self._subscription(device_id, node)

@@ -80,8 +80,9 @@ class MatterMapper:
             options.append(CredentialsType.qr)
         if (hint & (0x0002 | 0x0010) or "code" in instruction or "pin" in instruction) and CredentialsType.code not in options:
             options.append(CredentialsType.code.with_mask("DDD-DD-DDD"))
-        if hint & 0x0001:
-            options.append(CredentialsType.power_cycle)
+        # bit 0x0001 (Power Cycle Commissioning Mode) isn't representable as a
+        # CredentialsType — there's no code/QR/secret majordom can collect for it —
+        # so it doesn't contribute an option here.
 
         return options or [CredentialsType.none]
 

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import enum
 import inspect
 import logging
@@ -83,15 +84,16 @@ class MatterController(AbstractController):
     # -------------------------------------------------------------------------
 
     async def start(self):
+        self._background_tasks: list[asyncio.Task] = []
         self._matter_client_session = ClientSession()
         self._matter_client = MatterClient(matter_server_url, self._matter_client_session)
         await self._matter_client.connect()
 
         init_ready = asyncio.Event()
-        asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready))
+        self._background_tasks.append(asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready)))
         await init_ready.wait()
 
-        asyncio.create_task(self._matter_discovery_loop())
+        self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
         device_nodes: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
@@ -124,6 +126,18 @@ class MatterController(AbstractController):
 
     async def stop(self):
         self._majordom_descoveries.clear()
+
+        # Cancel the discovery loop and listener started in start() — otherwise they keep
+        # running against a matter client/event loop that stop() is about to tear down,
+        # which surfaces as "Future attached to a different loop" once the next test/run
+        # starts a fresh event loop.
+        for task in getattr(self, "_background_tasks", []):
+            task.cancel()
+        for task in getattr(self, "_background_tasks", []):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._background_tasks = []
+
         if not self._matter_client_session or not self._matter_client:
             return
         await self._matter_client.disconnect()

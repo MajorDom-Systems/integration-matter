@@ -17,6 +17,24 @@ class MatterMapper:
         """Deterministically converts a Matter string identifier to a UUID."""
         return uuid5(NAMESPACE_DNS, id)
 
+    # -------------------------------------------------------------------------
+    # Single source of truth for Matter id string formats, used to derive the
+    # deterministic UUIDs above. Keep every id-building call site going through
+    # these instead of formatting the f-strings inline.
+    # -------------------------------------------------------------------------
+
+    def device_uuid(self, node_id: int, product_name: str | None) -> UUID:
+        return self.matter_id_to_uuid(f"{node_id}_{product_name}")
+
+    def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
+        return self.matter_id_to_uuid(f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
+
+    def command_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
+        return self.matter_id_to_uuid(f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}")
+
+    def command_field_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_name: str) -> UUID:
+        return self.matter_id_to_uuid(f"{device_id}_field_{endpoint_id}/{cluster_id}/{command_id}/{field_name}")
+
     def define_credentials_type(
         self,
         commissioning_mode: int | None = None,

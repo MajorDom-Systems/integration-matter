@@ -27,7 +27,7 @@ async def start_all_mvd(request):
             os.path.join(BIN_DIR, device_type),
             "--discriminator", "3840",
             "--passcode", "20202021",
-            "--capabilities", "4",       # <--- ОСТАВЛЯЕМ ТОЛЬКО ON-NETWORK ДИСКАВЕРИ
+            "--capabilities", "4",       # <--- keep only ON-NETWORK discovery
             "--interface-id", "eth0"
         ],
         stdout=subprocess.DEVNULL,
@@ -45,7 +45,7 @@ async def start_mvd():
             os.path.join(BIN_DIR, "on-off-light"),
             "--discriminator", "3840",
             "--passcode", "20202021",
-            "--capabilities", "4",       # <--- ОСТАВЛЯЕМ ТОЛЬКО ON-NETWORK ДИСКАВЕРИ
+            "--capabilities", "4",       # <--- keep only ON-NETWORK discovery
             "--interface-id", "eth0"
         ],
         stdout=subprocess.DEVNULL,
@@ -63,7 +63,7 @@ async def start_mvd_with_pairing():
             os.path.join(BIN_DIR, "on-off-light"),
             "--discriminator", "3840",
             "--passcode", "20202021",""
-            "--capabilities", "4",       # <--- ОСТАВЛЯЕМ ТОЛЬКО ON-NETWORK ДИСКАВЕРИ
+            "--capabilities", "4",       # <--- keep only ON-NETWORK discovery
             "--interface-id", "eth0"
         ],
         stdout=subprocess.DEVNULL,

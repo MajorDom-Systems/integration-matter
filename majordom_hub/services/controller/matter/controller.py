@@ -152,7 +152,15 @@ class MatterController(AbstractController):
         if discovery.credentials is CredentialsType.qr:
             commission_node = await self._matter_client.commission_with_code(str(credentials))
         elif discovery.credentials is CredentialsType.code:
-            commission_node = await self._matter_client.commission_on_network(int(credentials))
+            if discovery.transport == "BLE":
+                # commission_on_network only works for devices already reachable over IP
+                # (matter-server's own docstring: "for advanced usecases only, use
+                # commission_with_code for regular commissioning") — a BLE-discovered
+                # device has no IP yet, so it must go through commission_with_code instead,
+                # which chip-tool routes over BLE automatically based on the code.
+                commission_node = await self._matter_client.commission_with_code(str(credentials))
+            else:
+                commission_node = await self._matter_client.commission_on_network(int(credentials))
         else:
             raise MatterUnexpectedError("This credentials type is not supported")
 

@@ -127,16 +127,37 @@ class MatterController(AbstractController):
             cancel()
             self._ble_cancel = None
 
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
         # Cancel the discovery loop and listener started in start() — otherwise they keep
         # running against a matter client/event loop that stop() is about to tear down,
         # which surfaces as "Future attached to a different loop" once the next test/run
-        # starts a fresh event loop.
-        for task in getattr(self, "_background_tasks", []):
+        # starts a fresh event loop. cancel() is safe to call across loops.
+        #
+        # Whether we then AWAIT them — and tear the matter client down — depends on the
+        # loop. If stop() runs on a different loop than start() did (e.g. invoked via a sync
+        # TestClient, whose portal runs on its own loop), awaiting any of these loop-bound
+        # futures (the tasks, or the ws client's disconnect/close, which awaits the same
+        # loop-A websocket) itself raises "attached to a different loop". There, cancel()
+        # above is the meaningful cleanup and we skip the awaits; the normal same-loop
+        # lifecycle does the full teardown.
+        background_tasks = getattr(self, "_background_tasks", [])
+        for task in background_tasks:
             task.cancel()
-        for task in getattr(self, "_background_tasks", []):
+        on_owning_loop = running_loop is not None and (
+            not background_tasks or background_tasks[0].get_loop() is running_loop
+        )
+        self._background_tasks = []
+
+        if not on_owning_loop:
+            return
+
+        for task in background_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
-        self._background_tasks = []
 
         if not self._matter_client_session or not self._matter_client:
             return

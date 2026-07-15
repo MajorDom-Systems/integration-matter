@@ -12,6 +12,24 @@ from matter_server.common.models import CommissionableNodeData
 from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd
 
 
+# Node ids that need more than the function-level @pytest.mark.flaky(reruns=1). door-lock is
+# the longest command test (~18 sequential commands run in dependency order), so its tail
+# commands are the most likely to hit an event-delivery timeout under load, and a single
+# rerun sometimes isn't enough. Give just this node an extra retry.
+_EXTRA_RERUN_NODES = {
+    "test_control_all_commands[door-lock]": 2,
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        for suffix, reruns in _EXTRA_RERUN_NODES.items():
+            if item.nodeid.endswith(suffix):
+                # append=False → this becomes the "closest" flaky marker, overriding the
+                # function-level reruns=1 (verified: pytest-rerunfailures reads the closest).
+                item.add_marker(pytest.mark.flaky(reruns=reruns), append=False)
+
+
 BIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bins")
 
 # How long to give the MVD binary to either crash or start listening before we

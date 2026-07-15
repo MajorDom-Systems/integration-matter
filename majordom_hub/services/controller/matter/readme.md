@@ -9,7 +9,7 @@ Two test tiers:
 - **Virtual** — `tests/test_controllers/test_matter/test_matter_controller.py`, driven by
   `docker-compose.matter-tests.yml`. Prebuilt **x86-64** Matter Virtual Device (MVD) binaries under
   `bins/` act as fake devices, commissioned over the network (no BLE). Runs in CI on x86-64 runners.
-- **Hardware** — `tests/test_controllers/test_matter/test_matter_controller_real.py`, on the
+- **Hardware** — `tests/test_controllers/test_matter/test_matter_controller_hardware.py`, on the
   self-hosted `lab-pi5` runner: a real Thread bulb commissioned over **BLE → Thread** through a real
   OpenThread Border Router (OTBR + SkyConnect RCP), verified physically via the IoT-cage photoresistor.
   Manual only (`workflow_dispatch`). The target device is selectable in one line — `_TARGET` in the

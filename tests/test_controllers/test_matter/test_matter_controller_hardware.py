@@ -1,10 +1,10 @@
 """
 Real-hardware Matter test — commissions a physical Thread bulb over BLE→Thread through the
 hub and verifies it physically via the IoT-cage photoresistor. Mirrors
-tests/test_controllers/test_zigbee/test_zigbee_controller_real.py, adapted for Matter's separate
+tests/test_controllers/test_zigbee/test_zigbee_controller_hardware.py, adapted for Matter's separate
 discovery/commission step, its matter-server dependency, and its Thread border-router dependency.
 
-Deselected by default (the `real_iot_device` marker). Runs on the self-hosted lab-pi5 runner via
+Deselected by default (the `hardware_iot_device` marker). Runs on the self-hosted lab-pi5 runner via
 the matter-hardware workflow. Preconditions on the runner (see the integration readme):
   * OTBR up as Thread leader on a freshly-pulled openthread/border-router image, REST on :8081.
   * matterjs-server up on :5580 (the hub's matter_server_url).
@@ -43,7 +43,7 @@ from majordom_hub.providers.paths import Paths
 from tests.hardware.iot_cage.threaded import ThreadedIotRpc
 from tests.test_controllers.test_matter import helper
 
-pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
+pytestmark = [pytest.mark.hardware_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
 cloud_key = Paths.data.keys.cloud.read_text()
 

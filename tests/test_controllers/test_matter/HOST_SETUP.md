@@ -1,7 +1,7 @@
 # lab-pi5 Matter/Thread hardware host setup
 
 How the self-hosted runner is wired so the real-hardware Matter test
-(`test_matter_controller_real.py`) can pass. Recreate this on the host if the rig is rebuilt.
+(`test_matter_controller_hardware.py`) can pass. Recreate this on the host if the rig is rebuilt.
 
 ## Host
 

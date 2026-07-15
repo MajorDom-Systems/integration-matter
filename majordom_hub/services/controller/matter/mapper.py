@@ -26,6 +26,7 @@ from .matter_spec import (
     ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
     AttributeKey,
+    EVERYDAY_CONTROL_ATTRIBUTES,
     FIELD_TYPE_TO_DATA_TYPE,
     MIN_MAX_VALUE,
     SYSTEM_ATTRIBUTES,
@@ -337,9 +338,12 @@ class MatterMapper:
                 sdk_cluster = ChipClusters(None).GetClusterInfoById(cluster_id)
                 sdk_attribute = sdk_cluster.get("attributes", {}).get(attribute_id, {})
                 if sdk_attribute.get("writable"):
-                    visibility = ParameterVisibility.setting
-                    if cluster_id == 0x00000202:  # FanControl
+                    # Writable attrs are configure-once settings by default; a curated few are
+                    # everyday main-surface controls (fan mode/speed, thermostat mode).
+                    if AttributeKey(cluster_id, attribute_id) in EVERYDAY_CONTROL_ATTRIBUTES:
                         visibility = ParameterVisibility.user
+                    else:
+                        visibility = ParameterVisibility.setting
                     role = ParameterRole.control
                 else:
                     visibility = ParameterVisibility.user

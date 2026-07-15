@@ -152,6 +152,19 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
 }
 
 
+# Writable attributes that are everyday, main-surface controls (ParameterVisibility.user)
+# rather than configure-once settings. Only writable attributes need to be listed here —
+# read-only attributes already map to `user`, and everyday controls exposed as *commands*
+# (brightness/level, on/off, cover open-close, color changes) are `user` via parse_commands.
+# So this set mostly covers clusters whose everyday control genuinely IS an attribute write.
+EVERYDAY_CONTROL_ATTRIBUTES: set[AttributeKey] = {
+    AttributeKey(0x202, 0x0),   # FanControl.FanMode (off/low/med/high/auto)
+    AttributeKey(0x202, 0x2),   # FanControl.PercentSetting
+    AttributeKey(0x202, 0x5),   # FanControl.SpeedSetting
+    AttributeKey(0x201, 0x1C),  # Thermostat.SystemMode (off/heat/cool/auto)
+}
+
+
 # Arguments to send along with a main-parameter command/attribute when the parameter itself
 # doesn't carry an obvious "activate" value (e.g. a mode/setpoint command). None means the
 # command takes no arguments; an int means a raw attribute value (only used for the FanControl
@@ -182,9 +195,8 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     # 0x0000005C: MainParameterSpec(0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
     0x00000506: MainParameterSpec(0x00000000, None),  # MediaPlayback.Play
     0x00000509: MainParameterSpec(0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
-    0x00000102: MainParameterSpec(0x00000002, None),  # WindowCovering.StopMotion
-    # 0x00000102: MainParameterSpec(0x00000000, None),  # WindowCovering.UpOrOpen (mutually exclusive with StopMotion above — a cluster can only have one entry here)
-    0x00000104: MainParameterSpec(0x00000000, None),  # ClosureControl.Stop
+    0x00000102: MainParameterSpec(0x00000000, None),  # WindowCovering.UpOrOpen — the everyday one-tap for a cover (open); StopMotion (0x02) only matters mid-motion, so it's not the primary action
+    0x00000104: MainParameterSpec(0x00000001, {'position': 1}),  # ClosureControl.MoveTo{position=MoveToFullyOpen} — open is the everyday one-tap; ClosureControl has no no-arg Open command (a latched closure may also need latch=False)
     0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
     0x0000009E: MainParameterSpec(0x00000000, {'newMode': 0}),  # WaterHeaterMode.ChangeToMode
     0x00000553: MainParameterSpec(0x00000000, {'streamUsage': 0, 'originatingEndpointID': 0}),  # WebRTCTransportProvider.SolicitOffer

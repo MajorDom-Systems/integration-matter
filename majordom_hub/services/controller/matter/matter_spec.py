@@ -160,33 +160,34 @@ DefaultParams = dict[str, Any] | int | None
 
 
 class MainParameterSpec(NamedTuple):
-    """One row of MAIN_PARAMETER_BY_CLUSTER: which cluster, which command (or — for
-    FanControl specifically — attribute) makes a sensible main_parameter, and what
-    default_params to send with it if the parameter has no obvious "activate" value."""
-    cluster_id: int
+    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: which command (or — for
+    FanControl specifically — attribute) makes a sensible main_parameter for that cluster,
+    and what default_params to send with it if the parameter has no obvious "activate"
+    value. Iteration order is priority order — the first cluster below that's present on
+    the device wins."""
     command_or_attribute_id: int
     default_params: DefaultParams
 
 
-MAIN_PARAMETER_BY_CLUSTER: list[MainParameterSpec] = [
-    MainParameterSpec(0x00000006, 0x00000002, None),  # OnOff.Toggle
-    MainParameterSpec(0x00000201, 0x00000000, {'mode': 1, 'amount': 5}),  # Thermostat.SetpointRaiseLower.Cool
-    MainParameterSpec(0x00000202, 0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
-    MainParameterSpec(0x00000056, 0x00000000, {'targetTemperature': 22}),  # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are feature-gated & mutually exclusive; targetTemperature covers the common "TN" feature case)
-    MainParameterSpec(0x00000060, 0x00000002, None),  # OperationalState.Start
-    MainParameterSpec(0x00000061, 0x00000003, None),  # RVCOperationalState.Resume
-    MainParameterSpec(0x0000005F, 0x00000001, {'timeToAdd': 30}),  # MicrowaveOvenControl.AddMoreTime
-    MainParameterSpec(0x00000050, 0x00000000, {'newMode': 0}),  # ModeSelect.ChangeToMode
-    MainParameterSpec(0x00000101, 0x00000001, {'PINCode': None}),  # DoorLock.UnlockDoor
-    # MainParameterSpec(0x0000005C, 0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
-    MainParameterSpec(0x00000506, 0x00000000, None),  # MediaPlayback.Play
-    MainParameterSpec(0x00000509, 0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
-    MainParameterSpec(0x00000102, 0x00000002, None),  # WindowCovering.StopMotion
-    # MainParameterSpec(0x00000102, 0x00000000, None),  # WindowCovering.UpOrOpen
-    MainParameterSpec(0x00000104, 0x00000000, None),  # ClosureControl.Stop
-    MainParameterSpec(0x00000099, 0x00000001, None),  # EnergyEvse.Disable
-    MainParameterSpec(0x0000009E, 0x00000000, {'newMode': 0}),  # WaterHeaterMode.ChangeToMode
-    MainParameterSpec(0x00000553, 0x00000000, {'streamUsage': 0, 'originatingEndpointID': 0}),  # WebRTCTransportProvider.SolicitOffer
-    MainParameterSpec(0x00000556, 0x00000000, None),  # Chime.PlayChimeSound
-    MainParameterSpec(0x00000081, 0x00000000, None),  # ValveConfigurationAndControl.Open
-]
+MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
+    0x00000006: MainParameterSpec(0x00000002, None),  # OnOff.Toggle
+    0x00000201: MainParameterSpec(0x00000000, {'mode': 1, 'amount': 5}),  # Thermostat.SetpointRaiseLower.Cool
+    0x00000202: MainParameterSpec(0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
+    0x00000056: MainParameterSpec(0x00000000, {'targetTemperature': 22}),  # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are feature-gated & mutually exclusive; targetTemperature covers the common "TN" feature case)
+    0x00000060: MainParameterSpec(0x00000002, None),  # OperationalState.Start
+    0x00000061: MainParameterSpec(0x00000003, None),  # RVCOperationalState.Resume
+    0x0000005F: MainParameterSpec(0x00000001, {'timeToAdd': 30}),  # MicrowaveOvenControl.AddMoreTime
+    0x00000050: MainParameterSpec(0x00000000, {'newMode': 0}),  # ModeSelect.ChangeToMode
+    0x00000101: MainParameterSpec(0x00000001, {'PINCode': None}),  # DoorLock.UnlockDoor
+    # 0x0000005C: MainParameterSpec(0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
+    0x00000506: MainParameterSpec(0x00000000, None),  # MediaPlayback.Play
+    0x00000509: MainParameterSpec(0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
+    0x00000102: MainParameterSpec(0x00000002, None),  # WindowCovering.StopMotion
+    # 0x00000102: MainParameterSpec(0x00000000, None),  # WindowCovering.UpOrOpen (mutually exclusive with StopMotion above — a cluster can only have one entry here)
+    0x00000104: MainParameterSpec(0x00000000, None),  # ClosureControl.Stop
+    0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
+    0x0000009E: MainParameterSpec(0x00000000, {'newMode': 0}),  # WaterHeaterMode.ChangeToMode
+    0x00000553: MainParameterSpec(0x00000000, {'streamUsage': 0, 'originatingEndpointID': 0}),  # WebRTCTransportProvider.SolicitOffer
+    0x00000556: MainParameterSpec(0x00000000, None),  # Chime.PlayChimeSound
+    0x00000081: MainParameterSpec(0x00000000, None),  # ValveConfigurationAndControl.Open
+}

@@ -354,25 +354,25 @@ class MatterController(AbstractController):
 
     def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, DefaultParams]:
         for endpoint_id, endpoint in node.endpoints.items():
-            for spec in MAIN_PARAMETER_BY_CLUSTER:
-                if spec.cluster_id not in endpoint.clusters:
+            for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
+                if cluster_id not in endpoint.clusters:
                     continue
 
-                if spec.cluster_id == 0x00000202:  # FanControl
-                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, spec.cluster_id, 0xFFFB) or []
+                if cluster_id == 0x00000202:  # FanControl
+                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
                     if supported_attribute_ids and spec.command_or_attribute_id not in supported_attribute_ids:
                         continue
                     return (
-                        self._mapper.attribute_parameter_uuid(device_id, endpoint_id, spec.cluster_id, spec.command_or_attribute_id),
+                        self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, spec.command_or_attribute_id),
                         spec.default_params,
                     )
 
-                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, spec.cluster_id, 0xFFF9) or []
+                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
                 if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
                     continue
 
                 return (
-                    self._mapper.command_parameter_uuid(device_id, endpoint_id, spec.cluster_id, spec.command_or_attribute_id),
+                    self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, spec.command_or_attribute_id),
                     spec.default_params,
                 )
         return None, None

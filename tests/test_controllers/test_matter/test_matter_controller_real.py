@@ -8,14 +8,17 @@ Deselected by default (the `real_iot_device` marker). Runs on the self-hosted la
 the matter-hardware workflow. Preconditions on the runner (see the integration readme):
   * OTBR up as Thread leader on a freshly-pulled openthread/border-router image, REST on :8081.
   * matterjs-server up on :5580 (the hub's matter_server_url).
-  * The IKEA KAJPLATS bulb wired to IoT-cage slot `_LAB_MATTER_DEVICE_IDX`, plus the cage Arduino.
+  * The target bulb wired to its IoT-cage slot, plus the cage Arduino. The light of both the IKEA
+    (slot 2) and the Nanoleaf (slot 3) falls on the single A0 photoresistor (cage channel 2).
 
-The DUT is the IKEA KAJPLATS: it opens a ~5-min Matter BLE pairing window on any power-on (no
-factory reset needed) and, unlike the Nanoleaf (firmware 4.1.3 wedges its Thread RX after one
-Invoke), it takes repeated commands reliably — so it's the device CI gates on.
+Target device is selectable in ONE line via `_TARGET` (or the `MATTER_HW_TARGET` env var):
+"ikea" or "nanoleaf". Both commission and take repeated commands reliably on the fixed-OTBR stack.
+The IKEA opens a ~5-min Matter BLE pairing window on any power-on (no factory reset needed); the
+Nanoleaf likewise re-advertises on power-on once decommissioned.
 """
 
 import asyncio
+import os
 import time
 import warnings
 from contextlib import asynccontextmanager
@@ -44,14 +47,25 @@ pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="sessi
 
 cloud_key = Paths.data.keys.cloud.read_text()
 
-# The IKEA KAJPLATS Matter pairing code (its 4-bit short discriminator 0xA matches the 0xA3B in
-# its 0xFFF6 advert). A plain power-on opens its pairing window; no factory reset needed.
-_IKEA_PAIRING_CODE = "2455-383-5850"
+# ---- DUT selection: switch the hardware target in ONE line (or via the MATTER_HW_TARGET env var).
+# Both devices are proven CI-stable on the fixed-OTBR stack; the old "Nanoleaf RX-wedge" turned out
+# to be an artifact of the broken border router, not firmware (see the matter readme).
+_TARGETS = {
+    # IKEA KAJPLATS: its 4-bit short discriminator 0xA matches the 0xA3B in its 0xFFF6 advert; VID
+    # 0x117C = 4476. A plain power-on opens its ~5-min pairing window; no factory reset needed.
+    "ikea": {"name": "IKEA KAJPLATS", "code": "2455-383-5850", "power_idx": 2, "vendor": "4476"},
+    # Nanoleaf Essentials A19 (NL67): VID 0x115A = 4442. Re-advertises on power-on when decommissioned.
+    "nanoleaf": {"name": "Nanoleaf Essentials", "code": "1321-631-8363", "power_idx": 3, "vendor": "4442"},
+}
+_TARGET = os.environ.get("MATTER_HW_TARGET", "ikea")  # <-- change this to select the device
+_DUT = _TARGETS[_TARGET]
 
-# IoT-cage slot wired to the Matter DUT. Slot 2 also carries the A0 photoresistor used for physical
-# verification; the Nanoleaf (slot 3) shares that one sensor, so the fixtures power everything else
-# off first to isolate the DUT's light on it.
-_LAB_MATTER_DEVICE_IDX = 2
+# IoT-cage relay slot that powers the selected DUT.
+_LAB_MATTER_DEVICE_IDX = _DUT["power_idx"]
+# Cage channel carrying the A0 photoresistor used for physical verification. It's a single shared
+# sensor (channel 2): the light of whichever bulb is powered falls on it, so it stays 2 regardless
+# of which relay slot powers the DUT.
+_SENSOR_IDX = 2
 
 # Cage Arduino serial port. Default to the STABLE by-id path, not /dev/ttyUSBn — USB enumeration on
 # the Pi reshuffles across reboots/replugs (the CH340 has been ttyUSB0 and ttyUSB2), and pointing at
@@ -222,40 +236,40 @@ async def power_on_and_settle(thread_provisioned, iot_cage: ThreadedIotRpc, matt
 
 
 async def test_discovery_and_pairing(power_on_and_settle, async_client, async_client_ws_connect, crud, get_user_bearer):
-    """Discover the powered-on IKEA over BLE and commission it BLE→Thread through the hub."""
+    """Discover the powered-on DUT over BLE and commission it BLE→Thread through the hub."""
     user = await crud.create_user()
 
     # Only the DUT is powered, so it should be the sole discovery. Generous timeout: BLE discovery +
     # the hub's 5s discovery-loop cadence.
-    # Poll until the IKEA's BLE commissionable discovery appears (VID 0x117C = 4476). Other adverts
-    # (e.g. a stale mDNS entry from another bulb) may be present, so select the IKEA specifically.
-    async def _find_ikea() -> str | None:
+    # Poll until the DUT's BLE commissionable discovery appears (matched by its vendor id). Other
+    # adverts (e.g. a stale mDNS entry from another bulb) may be present, so select the DUT's vendor.
+    async def _find_dut() -> str | None:
         r = await async_client.get("/v1/api/device/discoveries", headers=get_user_bearer(user.id))
         if r.status_code != 200:
             return None
         for did, d in r.json().items():
-            if d.get("transport") == "BLE" and "4476" in (d.get("device_manufacturer") or ""):
+            if d.get("transport") == "BLE" and _DUT["vendor"] in (d.get("device_manufacturer") or ""):
                 return did
         return None
 
     deadline = asyncio.get_event_loop().time() + 120
     discovery_id = None
     while asyncio.get_event_loop().time() < deadline:
-        discovery_id = await _find_ikea()
+        discovery_id = await _find_dut()
         if discovery_id:
             break
         await asyncio.sleep(1)
-    assert discovery_id, "IKEA BLE commissionable discovery did not appear within 120s"
+    assert discovery_id, f"{_DUT['name']} BLE commissionable discovery did not appear within 120s"
 
     room = await crud.create_room()
     data = {
-        "name": "IKEA KAJPLATS",
+        "name": _DUT["name"],
         "note": "hardware test",
         "icon": "bulb",
         "category": "light",
         "room_id": room.id.hex,
         "discovery_id": discovery_id,
-        "credentials": {"type": "code", "value": _IKEA_PAIRING_CODE},
+        "credentials": {"type": "code", "value": _DUT["code"]},
     }
 
     # Commissioning (BLE→PASE→armFailSafe→scanNetworks→AddThreadNetwork→connectNetwork→CASE) can take
@@ -300,7 +314,7 @@ async def test_discovery_paired(async_client, crud, get_user_bearer):
 
 
 async def test_control_onoff(
-    async_client, async_client_ws_connect, crud, get_user_bearer, iot_cage: ThreadedIotRpc, matter_device_idx: int
+    async_client, async_client_ws_connect, crud, get_user_bearer, iot_cage: ThreadedIotRpc
 ):
     """Drive OnOff over Matter and confirm the bulb physically changes via the photoresistor.
 
@@ -345,15 +359,16 @@ async def test_control_onoff(
                         return
 
     # The bulb starts ON (just powered). Off → sensor should fall; On → sensor should rise back.
-    iot_cage.clear_events(matter_device_idx)
+    # Events come from the shared A0 photoresistor (channel _SENSOR_IDX), not the DUT's power slot.
+    iot_cage.clear_events(_SENSOR_IDX)
     await invoke(off_id)
     await asyncio.sleep(2)
-    off_events = [e.value for e in iot_cage.get_events(matter_device_idx)]
+    off_events = [e.value for e in iot_cage.get_events(_SENSOR_IDX)]
 
-    iot_cage.clear_events(matter_device_idx)
+    iot_cage.clear_events(_SENSOR_IDX)
     await invoke(on_id)
     await asyncio.sleep(2)
-    on_events = [e.value for e in iot_cage.get_events(matter_device_idx)]
+    on_events = [e.value for e in iot_cage.get_events(_SENSOR_IDX)]
 
     await iot_cage.monitor(False)
 

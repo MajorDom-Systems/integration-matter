@@ -12,7 +12,8 @@ Two test tiers:
 - **Hardware** — `tests/test_controllers/test_matter/test_matter_controller_real.py`, on the
   self-hosted `lab-pi5` runner: a real Thread bulb commissioned over **BLE → Thread** through a real
   OpenThread Border Router (OTBR + SkyConnect RCP), verified physically via the IoT-cage photoresistor.
-  Manual only (`workflow_dispatch`).
+  Manual only (`workflow_dispatch`). The target device is selectable in one line — `_TARGET` in the
+  test, or the `MATTER_HW_TARGET=ikea|nanoleaf` env var (default `ikea`); both bulbs pass.
 
 ---
 
@@ -40,8 +41,12 @@ Two test tiers:
   `commission_with_code`; the server must *already* hold the operational dataset.
 - **The Arduino cage resets all relays OFF on every serial open** (DTR pulse) — bulbs lose power
   unless one fd holds the port open for the whole run.
-- **Nanoleaf firmware 4.1.3 wedges its Thread RX after one Matter `Invoke`** (unfixable, latest fw) —
-  keep it only as a flaky fixture; don't gate CI on it.
+- **The "Nanoleaf RX-wedge" was a broken-OTBR artifact, not firmware.** We'd blamed Nanoleaf fw 4.1.3
+  for wedging its Thread RX after one `Invoke`. Once the border router was healthy (fresh image, above),
+  it never reproduced: 25 back-to-back Toggle+read+ping cycles with an active subscription, plus
+  Level/Color commands and a 90 s idle soak, all clean — `ot-ctl ping` never dropped a packet. The old
+  symptom was a degraded Thread mesh from the spinel-failing RCP. **Both the IKEA and the Nanoleaf are
+  CI-usable.** (The Nanoleaf's shared A0-photoresistor light and its slot-3 power are wired in the test.)
 
 ## What it takes to make it work
 
@@ -56,8 +61,10 @@ Two test tiers:
    (`ot-ctl dataset active -x`, or the OTBR REST `GET /node/dataset/active`) and `set_thread_dataset`.
 4. **Flush the BlueZ cache immediately before each commission** and do not scan afterward:
    `for m in $(bluetoothctl devices | awk '{print $2}'); do bluetoothctl remove "$m"; done; systemctl restart bluetooth`.
-5. **Power the device on** (IKEA opens a ~5-min pairing window on any power-on; others need a factory
-   reset), driving the cage from a single held serial fd.
-6. **Use the IKEA bulb** (`2455-383-5850`) as the CI device; the Nanoleaf is a flaky fixture only.
+5. **Power the device on** (IKEA opens a ~5-min pairing window on any power-on; a decommissioned
+   Nanoleaf re-advertises on power-on), driving the cage from a single held serial fd.
+6. **Pick the target**: IKEA (`2455-383-5850`, cage slot 2) is the default CI device; switch to the
+   Nanoleaf (`1321-631-8363`, cage slot 3) with `MATTER_HW_TARGET=nanoleaf`. Both pass the full
+   discover → pair → OnOff-with-photoresistor → unpair flow.
 
 See `otbr-skyconnect-fix` in the assistant memory for the exact commands and recovery steps.

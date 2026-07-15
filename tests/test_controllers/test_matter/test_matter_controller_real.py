@@ -1,16 +1,18 @@
 """
-Real-hardware Matter test — mirrors tests/test_controllers/test_zigbee/test_zigbee_controller_real.py.
+Real-hardware Matter test — commissions a physical Thread bulb over BLE→Thread through the
+hub and verifies it physically via the IoT-cage photoresistor. Mirrors
+tests/test_controllers/test_zigbee/test_zigbee_controller_real.py, adapted for Matter's separate
+discovery/commission step, its matter-server dependency, and its Thread border-router dependency.
 
-DRAFT: this file is not runnable as-is. It needs a real Matter device paired once
-in the faraday cage so the placeholders below can be filled in with actual ids —
-see the "TODO(hardware)" markers. Everything else (fixture shapes, test flow) follows
-the Zigbee reference file, adapted for Matter's separate discovery/commissioning step
-and its matter-server dependency.
+Deselected by default (the `real_iot_device` marker). Runs on the self-hosted lab-pi5 runner via
+the matter-hardware workflow. Preconditions on the runner (see the integration readme):
+  * OTBR up as Thread leader on a freshly-pulled openthread/border-router image, REST on :8081.
+  * matterjs-server up on :5580 (the hub's matter_server_url).
+  * The IKEA KAJPLATS bulb wired to IoT-cage slot `_LAB_MATTER_DEVICE_IDX`, plus the cage Arduino.
 
-Unlike the MVD-based tests in this directory (test_matter_controller.py, using the
-function-scoped `start_mvd` fixtures from conftest.py), these tests run once per
-session against one real, already-wired device — hence the local fixture overrides
-below instead of reusing conftest.py's function-scoped ones.
+The DUT is the IKEA KAJPLATS: it opens a ~5-min Matter BLE pairing window on any power-on (no
+factory reset needed) and, unlike the Nanoleaf (firmware 4.1.3 wedges its Thread RX after one
+Invoke), it takes repeated commands reliably — so it's the device CI gates on.
 """
 
 import asyncio
@@ -36,24 +38,35 @@ from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
 from tests.hardware.iot_cage.threaded import ThreadedIotRpc
-from tests.test_controllers.test_matter.helper import flush_ble_cache
+from tests.test_controllers.test_matter import helper
 
 pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
 cloud_key = Paths.data.keys.cloud.read_text()
 
-# TODO(hardware): pair a real Matter device once in the cage (e.g. via the CLI —
-# see the `pair`/`devices`/`device` commands added to services/cli.py), then fill
-# these in from what it reports. _DEVICE_ID only needs to be known after pairing;
-# discovery id isn't fixed here because Matter's discovery id (mDNS instance_name-
-# derived) is generally not stable/predictable ahead of time the way Zigbee's
-# IEEE-derived one is — test_discovery_and_pairing below discovers it at runtime.
-_DEVICE_ID = "TODO-fill-in-after-first-real-pairing"
-_PARAM_MAIN_ID = "TODO-fill-in-after-first-real-pairing"  # the device's main_parameter (e.g. OnOff toggle)
+# The IKEA KAJPLATS Matter pairing code (its 4-bit short discriminator 0xA matches the 0xA3B in
+# its 0xFFF6 advert). A plain power-on opens its pairing window; no factory reset needed.
+_IKEA_PAIRING_CODE = "2455-383-5850"
 
-# lab-pi5 IoT cage slot wired to the Matter DUT — see test_zigbee/conftest.py's
-# port map comment for the other slots on the same cage.
-_LAB_MATTER_DEVICE_IDX = 1  # TODO(hardware): confirm/adjust once the DUT is wired
+# IoT-cage slot wired to the Matter DUT. Slot 2 also carries the A0 photoresistor used for physical
+# verification; the Nanoleaf (slot 3) shares that one sensor, so the fixtures power everything else
+# off first to isolate the DUT's light on it.
+_LAB_MATTER_DEVICE_IDX = 2
+
+# Cage Arduino serial port. Default to the STABLE by-id path, not /dev/ttyUSBn — USB enumeration on
+# the Pi reshuffles across reboots/replugs (the CH340 has been ttyUSB0 and ttyUSB2), and pointing at
+# the wrong node silently talks to the SkyConnect or Z-Wave stick instead.
+_LAB_IOT_CAGE_PORT = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+
+# Seconds to let the DUT boot and start advertising over BLE after power-on.
+_DUT_BOOT_S = 12.0
+# Minimum photoresistor delta between the bulb's On and Off levels to call the physical check passed
+# (observed On≈53 / Off≈5 on this rig; 20 is a comfortable margin against ambient drift).
+_SENSOR_MIN_DELTA = 20
+
+# Populated by test_discovery_and_pairing and consumed by the later ordered tests (one real device,
+# paired once, reused across this session — hence module state instead of re-pairing per test).
+_state: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -158,9 +171,7 @@ def matter_device_idx(request: pytest.FixtureRequest) -> int:
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def iot_cage(request: pytest.FixtureRequest) -> AsyncGenerator[ThreadedIotRpc, None]:
-    # Same cage as Zigbee's, different slot (see matter_device_idx) — see
-    # test_zigbee/conftest.py's port-map comment for the shared serial port default.
-    port: str = request.config.getoption("--iot-cage-port") or "/dev/ttyUSB0"
+    port: str = request.config.getoption("--iot-cage-port") or _LAB_IOT_CAGE_PORT
     cage = ThreadedIotRpc(port=port, timeout=8.0)
     await cage.connect()
     try:
@@ -174,113 +185,142 @@ async def iot_cage(request: pytest.FixtureRequest) -> AsyncGenerator[ThreadedIot
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def power_on_and_settle(iot_cage: ThreadedIotRpc, matter_device_idx: int):
-    """Power on the device and give it time to boot and start advertising over mDNS/BLE."""
-    await iot_cage.power(matter_device_idx, False)
+async def thread_provisioned(coordinator):
+    """Hand the Matter server the Thread operational dataset before any commissioning.
+
+    The hub's MatterController only calls commission_with_code — it never forms or forwards the
+    Thread network — so the server must already hold the dataset the device will be joined to. We
+    read the live dataset from the running OTBR (REST) and push it via set_thread_dataset.
+    """
+    dataset = await helper.fetch_otbr_dataset()
+    assert dataset and all(ch in "0123456789abcdefABCDEF" for ch in dataset), f"bad OTBR dataset: {dataset!r}"
+    await helper.set_thread_dataset(dataset)
+    return dataset
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def power_on_and_settle(thread_provisioned, iot_cage: ThreadedIotRpc, matter_device_idx: int):
+    """Isolate the shared sensor to the DUT, flush BLE, power the DUT on, and let it advertise."""
+    # Everything off first so the one shared photoresistor sees only the DUT's light.
+    await iot_cage.all_off()
     await asyncio.sleep(1)
-    # Flush BlueZ's cache while the device is off, so when it powers on and re-advertises
-    # its (possibly static) BLE address, the controller's InterfacesAdded-based discovery
-    # re-fires for it. Must be the last BLE-touching step before commissioning — no scan
-    # in between. Best-effort / host-only; see helper.flush_ble_cache and the matter readme.
-    flush_ble_cache()
+    # Flush BlueZ's cache so the controller's InterfacesAdded-based discovery re-fires for the IKEA's
+    # STATIC BLE address when it re-advertises on power-on. Must be the last BLE-touching step before
+    # discovery/commission — do not scan in between. (Best-effort/host-only; see helper.flush_ble_cache.)
+    helper.flush_ble_cache()
     await iot_cage.power(matter_device_idx, True)
-    await asyncio.sleep(10)  # TODO(hardware): tune to the real DUT's actual boot time
+    await asyncio.sleep(_DUT_BOOT_S)  # boot + BLE advert; opens the IKEA's ~5-min pairing window
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests (ordered: pairing populates _state for the control/unpair tests)
 # ---------------------------------------------------------------------------
 
 
 async def test_discovery_and_pairing(power_on_and_settle, async_client, async_client_ws_connect, crud, get_user_bearer):
-    """
-    Matter specifics vs Zigbee: there IS a separate discovery step (mDNS/BLE advertisement)
-    before pairing, and pairing needs credentials (QR/pairing code), unlike Zigbee's
-    join-on-power-on flow. This only checks discovery → pair → connect end to end —
-    not coverage of attributes/commands, that's what test_matter_controller.py is for.
-    """
+    """Discover the powered-on IKEA over BLE and commission it BLE→Thread through the hub."""
     user = await crud.create_user()
 
-    async with async_client_ws_connect(user.id, timeout=30) as ws:
-        r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-        assert r.status_code == 200, r.json()
-        if not r.json():
-            while True:
-                message = await ws.receive_json()
-                if message["type"] == "majordom_did_discover_discovery":
-                    break
-
-    r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200 and r.json(), r.json()
-    discovery_id = next(iter(r.json()))
+    # Only the DUT is powered, so it should be the sole discovery. Generous timeout: BLE discovery +
+    # the hub's 5s discovery-loop cadence.
+    discoveries = await helper.wait_for_discovery(async_client, get_user_bearer(user.id), timeout=120)
+    assert discoveries, "IKEA did not appear in discovery"
+    discovery_id = next(iter(discoveries))
 
     room = await crud.create_room()
     data = {
-        "name": "Test Device",
-        "note": "test note",
-        "icon": "test icon",
-        "category": "test category",
+        "name": "IKEA KAJPLATS",
+        "note": "hardware test",
+        "icon": "bulb",
+        "category": "light",
         "room_id": room.id.hex,
         "discovery_id": discovery_id,
-        "credentials": {"type": "code", "value": "20202021"},  # TODO(hardware): the DUT's actual pairing code/type
+        "credentials": {"type": "code", "value": _IKEA_PAIRING_CODE},
     }
 
-    async with async_client_ws_connect(user.id, timeout=60) as ws:
+    # Commissioning (BLE→PASE→armFailSafe→scanNetworks→AddThreadNetwork→connectNetwork→CASE) can take
+    # a few minutes; wait for the connect event on the user WS.
+    async with async_client_ws_connect(user.id, timeout=240) as ws:
         r = await async_client.post("/v1/api/device", json=data, headers=get_user_bearer(user.id))
-        assert r.status_code == 200 and r.json() and r.json()["name"] == data["name"], r.json()
+        assert r.status_code == 200 and r.json().get("name") == data["name"], r.json()
         paired_device_id = r.json()["id"]
         while True:
             message = await ws.receive_json()
             if message["type"] == "majordom_did_connect_device":
                 break
     assert message["data"] == paired_device_id
-    # TODO(hardware): once known, replace this assert with `assert paired_device_id == _DEVICE_ID`
-    # (and use _DEVICE_ID directly, like the Zigbee reference does) so re-runs verify the
-    # device's id stayed stable rather than trusting whatever this run happened to pair.
+
+    # Resolve the OnOff attribute parameter (cluster 6, attribute 0) for the control/verify test.
+    r = await async_client.get(f"/v1/api/device/{paired_device_id}", headers=get_user_bearer(user.id))
+    assert r.status_code == 200, r.json()
+    onoff_param_id = next(
+        p["id"]
+        for p in r.json()["parameters"]
+        if p["integration_data"].get("type") == "attribute"
+        and p["integration_data"].get("cluster_id") == 6
+        and p["integration_data"].get("attribute_id") == 0
+    )
+    _state["device_id"] = paired_device_id
+    _state["onoff_param_id"] = onoff_param_id
 
 
 async def test_discovery_paired(async_client, crud, get_user_bearer):
-    # assumes device is already paired and reachable after test_discovery_and_pairing
+    """Once paired, the device should no longer show up as a fresh discovery."""
+    assert _state.get("device_id"), "pairing test must run first"
     user = await crud.create_user()
-    r = await async_client.get("v1/api/device/discoveries", headers=get_user_bearer(user.id))
+    r = await async_client.get("/v1/api/device/discoveries", headers=get_user_bearer(user.id))
     assert r.status_code == 200 and r.json() == {}, r.json()
 
 
-async def test_control_main_parameter(crud, async_client_ws_connect, iot_cage: ThreadedIotRpc | None, matter_device_idx: int):
-    # assumes device is already paired and reachable after test_discovery_and_pairing
-    """Toggle the device's main parameter; if the cage is present, verify the sensor slot changed."""
-    if iot_cage is not None:
-        await iot_cage.monitor(True)
-        iot_cage.clear_events(matter_device_idx)
+async def test_control_onoff(async_client_ws_connect, crud, get_user_bearer, iot_cage: ThreadedIotRpc, matter_device_idx: int):
+    """Drive OnOff over Matter and confirm the bulb physically changes via the photoresistor."""
+    device_id = _state.get("device_id")
+    param_id = _state.get("onoff_param_id")
+    assert device_id and param_id, "pairing test must run first"
 
     user = await crud.create_user()
-    command = {
-        "type": "device_command",
-        "data": {
-            "device_id": _DEVICE_ID,
-            "parameter_id": _PARAM_MAIN_ID,
-            "value": None,
-        },
-    }
-    message = None
-    async with async_client_ws_connect(user.id, timeout=10) as ws:
-        await ws.send_json(command)
-        while True:
-            message = await ws.receive_json()
-            if message["type"] == "majordom_did_receive_event":
-                break
-    assert message and message.get("type") == "majordom_did_receive_event", message
+    await iot_cage.monitor(True)
 
-    if iot_cage is not None:
-        await asyncio.sleep(0.5)  # let sensor event propagate
-        events = iot_cage.get_events(matter_device_idx)
-        assert events, f"Expected a sensor event on cage slot {matter_device_idx} after toggle command"
-        await iot_cage.monitor(False)
-    else:
-        warnings.warn("iot_cage is None, skipping sensor event verification")
+    async def send(value: bool):
+        async with async_client_ws_connect(user.id, timeout=20) as ws:
+            await ws.send_json(
+                {"type": "device_command", "data": {"device_id": str(device_id), "parameter_id": str(param_id), "value": value}}
+            )
+            async with asyncio.timeout(15):
+                while True:
+                    message = await ws.receive_json()
+                    if message["type"] == "majordom_did_connect_device":
+                        continue
+                    assert message["type"] == "majordom_did_receive_event", message
+                    return
+
+    # The bulb starts ON (just powered). Off → sensor should fall; On → sensor should rise back.
+    iot_cage.clear_events(matter_device_idx)
+    await send(False)
+    await asyncio.sleep(2)
+    off_events = [e.value for e in iot_cage.get_events(matter_device_idx)]
+
+    iot_cage.clear_events(matter_device_idx)
+    await send(True)
+    await asyncio.sleep(2)
+    on_events = [e.value for e in iot_cage.get_events(matter_device_idx)]
+
+    await iot_cage.monitor(False)
+
+    assert off_events, "no photoresistor reading after Off — is the DUT the only bulb powered?"
+    assert on_events, "no photoresistor reading after On"
+    off_level, on_level = min(off_events), max(on_events)
+    assert on_level - off_level >= _SENSOR_MIN_DELTA, (
+        f"photoresistor did not track OnOff (off={off_events}, on={on_events}); "
+        f"delta {on_level - off_level} < {_SENSOR_MIN_DELTA}"
+    )
 
 
-async def test_unpair(async_client, crud, get_user_bearer, iot_cage: ThreadedIotRpc | None, matter_device_idx: int):
+async def test_unpair(async_client, crud, get_user_bearer):
+    """Remove the device; this is also the session's cleanup of the real commissioning."""
+    device_id = _state.get("device_id")
+    assert device_id, "pairing test must run first"
     user = await crud.create_user()
-    r = await async_client.delete(f"/v1/api/device/{_DEVICE_ID}", headers=get_user_bearer(user.id))
+    r = await async_client.delete(f"/v1/api/device/{device_id}", headers=get_user_bearer(user.id))
     assert r.status_code == 200, r.json()
+    _state.pop("device_id", None)

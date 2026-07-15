@@ -1,4 +1,5 @@
 import asyncio
+import os
 import pytest
 import random
 import subprocess
@@ -78,15 +79,86 @@ async def unpair_mvd(node_id: int | None = None):
         await app.disconnect()
         await session.close()
 
-async def wait_for_discovery(async_client, headers, timeout: float = 4.0, interval: float = 0.5) -> dict:
-    """Poll discovery endpoint until at least one device appears or timeout is reached."""
-    deadline = asyncio.get_event_loop().time() + timeout
+async def fetch_otbr_dataset(rest_url: str | None = None) -> str:
+    """Fetch OTBR's active operational dataset (hex TLV) via its REST API.
+
+    The hub never forms or reads the Thread network itself; the hardware test uses this to
+    hand the dataset to the Matter server (see set_thread_dataset). Override the base URL with
+    the OTBR_REST_URL env var (default matches the lab-pi5 OTBR container's OT_REST_LISTEN_*).
+    """
+    rest_url = rest_url or os.environ.get("OTBR_REST_URL", "http://localhost:8081")
+    async with ClientSession() as session:
+        async with session.get(f"{rest_url}/node/dataset/active", headers={"Accept": "text/plain"}) as r:
+            r.raise_for_status()
+            return (await r.text()).strip()
+
+
+async def set_thread_dataset(dataset_hex: str):
+    """Push a Thread operational dataset to the Matter server.
+
+    Required before commissioning a real Thread device: MatterController.pair_device only calls
+    commission_with_code, so the server must already hold the dataset the device will be joined to.
+    """
+    session = ClientSession()
+    app = MatterClient(matter_server_url, session)
+    try:
+        await app.connect()
+        event = asyncio.Event()
+        asyncio.create_task(app.start_listening(init_ready=event))
+        await event.wait()
+        await app.set_thread_operational_dataset(dataset_hex)
+    finally:
+        await app.disconnect()
+        await session.close()
+
+
+# The very first discovery in a whole test session is the slow one: matter-server's
+# mDNS browse cache is cold, and mDNS itself is slower to converge under emulation
+# (Rosetta on an Apple-silicon Mac) or across a docker bridge. We give that ONE call a
+# generous "warm-up" budget to absorb the cold start; every later call keeps the tight
+# `timeout` so a genuinely-broken discovery still fails fast in the parametrized/repeated
+# tests instead of each of them eating the full cold-start budget.
+#
+# Both budgets are env-overridable so the emulated mac path (where mDNS converges slower)
+# can relax them without changing the tight defaults used by native CI:
+#   MATTER_DISCOVERY_WARMUP_S  — the one-time first-call budget (cold mDNS start).
+#   MATTER_DISCOVERY_TIMEOUT_S — the per-test budget for every subsequent discovery.
+_DISCOVERY_WARMUP_TIMEOUT_S = float(os.environ.get("MATTER_DISCOVERY_WARMUP_S", "90"))
+_DISCOVERY_TIMEOUT_S = float(os.environ.get("MATTER_DISCOVERY_TIMEOUT_S", "4"))
+_discovery_warmup_used = False
+
+
+async def wait_for_discovery(async_client, headers, timeout: float | None = None, interval: float = 0.5) -> dict:
+    """Poll discovery endpoint until at least one device appears or timeout is reached.
+
+    The first call in a session uses `_DISCOVERY_WARMUP_TIMEOUT_S` instead of `timeout`,
+    to absorb matter-server's one-time cold mDNS start; every subsequent call uses the
+    tight per-test `timeout` (defaults to `_DISCOVERY_TIMEOUT_S`).
+
+    Emits a `[discovery-timing]` line per call (visible with `pytest -s`) so the actual
+    convergence latency can be measured — used to pick a safe per-test timeout.
+    """
+    global _discovery_warmup_used
+    if timeout is None:
+        timeout = _DISCOVERY_TIMEOUT_S
+    effective_timeout = timeout
+    is_warmup = not _discovery_warmup_used
+    if is_warmup:
+        effective_timeout = max(timeout, _DISCOVERY_WARMUP_TIMEOUT_S)
+        _discovery_warmup_used = True
+
+    start = asyncio.get_event_loop().time()
+    deadline = start + effective_timeout
     while asyncio.get_event_loop().time() < deadline:
         r = await async_client.get('/v1/api/device/discoveries', headers=headers)
         if r.status_code == 200 and r.json():
+            elapsed = asyncio.get_event_loop().time() - start
+            print(f"[discovery-timing] converged={elapsed:.2f}s budget={effective_timeout:.0f}s warmup={is_warmup}", flush=True)
             return r.json()
         await asyncio.sleep(interval)
-    pytest.fail(f"No devices discovered within {timeout}s")
+    elapsed = asyncio.get_event_loop().time() - start
+    print(f"[discovery-timing] FAILED after {elapsed:.2f}s budget={effective_timeout:.0f}s warmup={is_warmup}", flush=True)
+    pytest.fail(f"No devices discovered within {effective_timeout}s")
 
 def generate_value(field: dict):
     data_type = field.get("data_type")

@@ -1,3 +1,5 @@
+from typing import Any, NamedTuple
+
 from majordom_hub.schemas.parameter import ParameterUnit, ParameterDataType
 
 
@@ -58,74 +60,87 @@ SYSTEM_ATTRIBUTES: set[int] = {
     0x0000FFFD  # clusterRevision
 }
 
-MIN_MAX_VALUE: dict[str, tuple[int, int]] = {
-    "Unsigned Integer 1-byte value": (0, UINT8_MAX),
-    "Unsigned Integer 2-byte value": (0, UINT16_MAX),
-    "Unsigned Integer 4-byte value": (0, UINT32_MAX),
-    "Unsigned Integer 8-byte value": (0, UINT64_MAX),
-    "Signed Integer 1-byte value":   (INT8_MIN,  INT8_MAX),
-    "Signed Integer 2-byte value":   (INT16_MIN, INT16_MAX),
-    "Signed Integer 4-byte value":   (INT32_MIN, INT32_MAX),
-    "Signed Integer 8-byte value":   (INT64_MIN, INT64_MAX),
+
+class ValueRange(NamedTuple):
+    min: int
+    max: int
+
+
+MIN_MAX_VALUE: dict[str, ValueRange] = {
+    "Unsigned Integer 1-byte value": ValueRange(0, UINT8_MAX),
+    "Unsigned Integer 2-byte value": ValueRange(0, UINT16_MAX),
+    "Unsigned Integer 4-byte value": ValueRange(0, UINT32_MAX),
+    "Unsigned Integer 8-byte value": ValueRange(0, UINT64_MAX),
+    "Signed Integer 1-byte value":   ValueRange(INT8_MIN,  INT8_MAX),
+    "Signed Integer 2-byte value":   ValueRange(INT16_MIN, INT16_MAX),
+    "Signed Integer 4-byte value":   ValueRange(INT32_MIN, INT32_MAX),
+    "Signed Integer 8-byte value":   ValueRange(INT64_MIN, INT64_MAX),
 }
 
 
-ATTRIBUTE_UNITS: dict[tuple[int, int], ParameterUnit] = {
-    (0x8, 0x0): ParameterUnit.percentage,  # LevelControl.CurrentLevel
-    (0x102, 0x8): ParameterUnit.percentage,  # WindowCovering.LiftPercentage
-    (0x102, 0x9): ParameterUnit.percentage,  # WindowCovering.TiltPercentage
-    (0x201, 0x0): ParameterUnit.celsius,  # Thermostat.LocalTemperature
-    (0x201, 0x11): ParameterUnit.celsius,  # Thermostat.OccupiedCoolingSetpoint
-    (0x201, 0x12): ParameterUnit.celsius,  # Thermostat.OccupiedHeatingSetpoint
-    (0x202, 0x2): ParameterUnit.percentage,  # FanControl.PercentSetting
-    (0x202, 0x3): ParameterUnit.percentage,  # FanControl.PercentCurrent
-    (0x300, 0x0): ParameterUnit.arcdegree,  # ColorControl.CurrentHue (raw 0-254, degrees = value * 360 / 254)
-    (0x300, 0x1): ParameterUnit.percentage,  # ColorControl.CurrentSaturation
-    (0x400, 0x0): ParameterUnit.lux,  # IlluminanceMeasurement.MeasuredValue
-    (0x402, 0x0): ParameterUnit.celsius,  # TemperatureMeasurement.MeasuredValue
-    (0x405, 0x0): ParameterUnit.percentage,  # RelativeHumidityMeasurement.MeasuredValue
-    (0x40c, 0x0): ParameterUnit.ppm,  # CarbonMonoxideMeasurement.MeasuredValue
-    (0x40d, 0x0): ParameterUnit.ppm,  # CarbonDioxideMeasurement.MeasuredValue
+class AttributeKey(NamedTuple):
+    """Identifies a single attribute on a cluster — the shared dict key shape for
+    ATTRIBUTE_UNITS / ATTRIBUTE_SCALE / ATTRIBUTE_MIN_STEPS below."""
+    cluster_id: int
+    attribute_id: int
+
+
+ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
+    AttributeKey(0x8, 0x0): ParameterUnit.percentage,  # LevelControl.CurrentLevel
+    AttributeKey(0x102, 0x8): ParameterUnit.percentage,  # WindowCovering.LiftPercentage
+    AttributeKey(0x102, 0x9): ParameterUnit.percentage,  # WindowCovering.TiltPercentage
+    AttributeKey(0x201, 0x0): ParameterUnit.celsius,  # Thermostat.LocalTemperature
+    AttributeKey(0x201, 0x11): ParameterUnit.celsius,  # Thermostat.OccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x12): ParameterUnit.celsius,  # Thermostat.OccupiedHeatingSetpoint
+    AttributeKey(0x202, 0x2): ParameterUnit.percentage,  # FanControl.PercentSetting
+    AttributeKey(0x202, 0x3): ParameterUnit.percentage,  # FanControl.PercentCurrent
+    AttributeKey(0x300, 0x0): ParameterUnit.arcdegree,  # ColorControl.CurrentHue (raw 0-254, degrees = value * 360 / 254)
+    AttributeKey(0x300, 0x1): ParameterUnit.percentage,  # ColorControl.CurrentSaturation
+    AttributeKey(0x400, 0x0): ParameterUnit.lux,  # IlluminanceMeasurement.MeasuredValue
+    AttributeKey(0x402, 0x0): ParameterUnit.celsius,  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x405, 0x0): ParameterUnit.percentage,  # RelativeHumidityMeasurement.MeasuredValue
+    AttributeKey(0x40c, 0x0): ParameterUnit.ppm,  # CarbonMonoxideMeasurement.MeasuredValue
+    AttributeKey(0x40d, 0x0): ParameterUnit.ppm,  # CarbonDioxideMeasurement.MeasuredValue
     # Pm25Measurement.MeasuredValue: unit is device-configured (mass or molar concentration,
     # via the cluster's MeasurementUnit attribute) — not necessarily ppm. Left unmapped
     # (defaults to plain) rather than asserting a possibly-wrong unit.
-    (0x56, 0x0): ParameterUnit.celsius,  # TemperatureControl.TemperatureSetpoint
-    (0x90, 0x8): ParameterUnit.watt,  # ElectricalPowerMeasurement.ActivePower (raw mW, see ATTRIBUTE_SCALE)
-    (0x90, 0x4): ParameterUnit.volt,  # ElectricalPowerMeasurement.Voltage (raw mV, see ATTRIBUTE_SCALE)
-    (0x90, 0x5): ParameterUnit.ampere,  # ElectricalPowerMeasurement.ActiveCurrent (raw mA, see ATTRIBUTE_SCALE)
-    (0x91, 0x1): ParameterUnit.joule,  # ElectricalEnergyMeasurement.CumulativeEnergyImported (struct; .energy in mWh, see ATTRIBUTE_SCALE)
-    (0x403, 0x0): ParameterUnit.pascal,  # PressureMeasurement.MeasuredValue (raw deci-kPa, see ATTRIBUTE_SCALE)
-    (0x2f, 0xc): ParameterUnit.percentage,  # PowerSource.BatPercentRemaining
+    AttributeKey(0x56, 0x0): ParameterUnit.celsius,  # TemperatureControl.TemperatureSetpoint
+    AttributeKey(0x90, 0x8): ParameterUnit.watt,  # ElectricalPowerMeasurement.ActivePower (raw mW, see ATTRIBUTE_SCALE)
+    AttributeKey(0x90, 0x4): ParameterUnit.volt,  # ElectricalPowerMeasurement.Voltage (raw mV, see ATTRIBUTE_SCALE)
+    AttributeKey(0x90, 0x5): ParameterUnit.ampere,  # ElectricalPowerMeasurement.ActiveCurrent (raw mA, see ATTRIBUTE_SCALE)
+    AttributeKey(0x91, 0x1): ParameterUnit.joule,  # ElectricalEnergyMeasurement.CumulativeEnergyImported (struct; .energy in mWh, see ATTRIBUTE_SCALE)
+    AttributeKey(0x403, 0x0): ParameterUnit.pascal,  # PressureMeasurement.MeasuredValue (raw deci-kPa, see ATTRIBUTE_SCALE)
+    AttributeKey(0x2f, 0xc): ParameterUnit.percentage,  # PowerSource.BatPercentRemaining
 }
 
 # Multiplier applied to a raw attribute value to convert it into ATTRIBUTE_UNITS' base unit
 # (e.g. Matter reports power in mW; watt is the base unit, so scale = 0.001).
-ATTRIBUTE_SCALE: dict[tuple[int, int], float] = {
-    (0x90, 0x8): 0.001,   # ElectricalPowerMeasurement.ActivePower: mW -> W
-    (0x90, 0x4): 0.001,   # ElectricalPowerMeasurement.Voltage: mV -> V
-    (0x90, 0x5): 0.001,   # ElectricalPowerMeasurement.ActiveCurrent: mA -> A
-    (0x91, 0x1): 3.6,     # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> Wh -> J (x0.001 x3600)
-    (0x403, 0x0): 100,    # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
+ATTRIBUTE_SCALE: dict[AttributeKey, float] = {
+    AttributeKey(0x90, 0x8): 0.001,   # ElectricalPowerMeasurement.ActivePower: mW -> W
+    AttributeKey(0x90, 0x4): 0.001,   # ElectricalPowerMeasurement.Voltage: mV -> V
+    AttributeKey(0x90, 0x5): 0.001,   # ElectricalPowerMeasurement.ActiveCurrent: mA -> A
+    AttributeKey(0x91, 0x1): 3.6,     # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> Wh -> J (x0.001 x3600)
+    AttributeKey(0x403, 0x0): 100,    # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
 }
 
 
-ATTRIBUTE_MIN_STEPS: dict[tuple[int, int], int | float] = {
-    (0x0008, 0x0000): 1,                # CurrentLevel (uint8, 0-254)
-    (0x0300, 0x0000): 1,                # CurrentHue (verified: id 0x0000, uint8, step 1)
-    (0x0300, 0x0001): 1,                # CurrentSaturation (verified: id 0x0001, uint8, step 1)
-    (0x0300, 0x0007): 1,                # ColorTemperatureMireds (verified: id 0x0007, uint16, step 1)
-    (0x0201, 0x0010): 0.01,             # LocalTemperatureCalibration (SignedTemperature, -2.5°C to 2.5°C)
-    (0x0201, 0x0011): 0.01,             # OccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
-    (0x0201, 0x0012): 0.01,             # OccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
-    (0x0201, 0x0013): 0.01,             # UnoccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
-    (0x0201, 0x0014): 0.01,             # UnoccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
-    (0x0402, 0x0000): 0.01,             # MeasuredValue (temperature type, 0.01°C resolution)
-    (0x0405, 0x0000): 0.01,             # MeasuredValue (0.01% resolution)
-    (0x0403, 0x0000): 10,               # MeasuredValue (raw step 0.1 deci-kPa, scaled x100 to Pa -> 10 Pa)
-    (0x0102, 0x0008): 1,                # CurrentPositionLiftPercentage (plain percent 0-100, not Percent100ths)
-    (0x0102, 0x0009): 1,                # CurrentPositionTiltPercentage (plain percent 0-100, not Percent100ths)
-    (0x0102, 0x000B): 0.01,             # TargetPositionLiftPercent100ths (percent100ths, 0.01%)
-    (0x0102, 0x000C): 0.01,             # TargetPositionTiltPercent100ths (percent100ths, 0.01%)
+ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
+    AttributeKey(0x0008, 0x0000): 1,                # CurrentLevel (uint8, 0-254)
+    AttributeKey(0x0300, 0x0000): 1,                # CurrentHue (verified: id 0x0000, uint8, step 1)
+    AttributeKey(0x0300, 0x0001): 1,                # CurrentSaturation (verified: id 0x0001, uint8, step 1)
+    AttributeKey(0x0300, 0x0007): 1,                # ColorTemperatureMireds (verified: id 0x0007, uint16, step 1)
+    AttributeKey(0x0201, 0x0010): 0.01,             # LocalTemperatureCalibration (SignedTemperature, -2.5°C to 2.5°C)
+    AttributeKey(0x0201, 0x0011): 0.01,             # OccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0012): 0.01,             # OccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0013): 0.01,             # UnoccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0014): 0.01,             # UnoccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
+    AttributeKey(0x0402, 0x0000): 0.01,             # MeasuredValue (temperature type, 0.01°C resolution)
+    AttributeKey(0x0405, 0x0000): 0.01,             # MeasuredValue (0.01% resolution)
+    AttributeKey(0x0403, 0x0000): 10,               # MeasuredValue (raw step 0.1 deci-kPa, scaled x100 to Pa -> 10 Pa)
+    AttributeKey(0x0102, 0x0008): 1,                # CurrentPositionLiftPercentage (plain percent 0-100, not Percent100ths)
+    AttributeKey(0x0102, 0x0009): 1,                # CurrentPositionTiltPercentage (plain percent 0-100, not Percent100ths)
+    AttributeKey(0x0102, 0x000B): 0.01,             # TargetPositionLiftPercent100ths (percent100ths, 0.01%)
+    AttributeKey(0x0102, 0x000C): 0.01,             # TargetPositionTiltPercent100ths (percent100ths, 0.01%)
 }
 
 
@@ -137,26 +152,41 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
 }
 
 
-MAIN_PARAMETER_BY_CLUSTER = [
-    # cluster_id, command_id, default_params
-    (0x00000006, 0x00000002, None),  # OnOff.Toggle
-    (0x00000201, 0x00000000, {'mode': 1, 'amount': 5}),  # Thermostat.SetpointRaiseLower.Cool
-    (0x00000202, 0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
-    (0x00000056, 0x00000000, {'targetTemperature': 22}),  # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are feature-gated & mutually exclusive; targetTemperature covers the common "TN" feature case)
-    (0x00000060, 0x00000002, None),  # OperationalState.Start
-    (0x00000061, 0x00000003, None),  # RVCOperationalState.Resume
-    (0x0000005F, 0x00000001, {'timeToAdd': 30}),  # MicrowaveOvenControl.AddMoreTime
-    (0x00000050, 0x00000000, {'newMode': 0}),  # ModeSelect.ChangeToMode
-    (0x00000101, 0x00000001, {'PINCode': None}),  # DoorLock.UnlockDoor
-    # (0x0000005C, 0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
-    (0x00000506, 0x00000000, None),  # MediaPlayback.Play
-    (0x00000509, 0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
-    (0x00000102, 0x00000002, None),  # WindowCovering.StopMotion
-    # (0x00000102, 0x00000000, None),  # WindowCovering.UpOrOpen
-    (0x00000104, 0x00000000, None),  # ClosureControl.Stop
-    (0x00000099, 0x00000001, None),  # EnergyEvse.Disable
-    (0x0000009E, 0x00000000, {'newMode': 0}),  # WaterHeaterMode.ChangeToMode
-    (0x00000553, 0x00000000, {'streamUsage': 0, 'originatingEndpointID': 0}),  # WebRTCTransportProvider.SolicitOffer
-    (0x00000556, 0x00000000, None),  # Chime.PlayChimeSound
-    (0x00000081, 0x00000000, None),  # ValveConfigurationAndControl.Open
+# Arguments to send along with a main-parameter command/attribute when the parameter itself
+# doesn't carry an obvious "activate" value (e.g. a mode/setpoint command). None means the
+# command takes no arguments; an int means a raw attribute value (only used for the FanControl
+# case below, where command_or_attribute_id is actually an attribute id).
+DefaultParams = dict[str, Any] | int | None
+
+
+class MainParameterSpec(NamedTuple):
+    """One row of MAIN_PARAMETER_BY_CLUSTER: which cluster, which command (or — for
+    FanControl specifically — attribute) makes a sensible main_parameter, and what
+    default_params to send with it if the parameter has no obvious "activate" value."""
+    cluster_id: int
+    command_or_attribute_id: int
+    default_params: DefaultParams
+
+
+MAIN_PARAMETER_BY_CLUSTER: list[MainParameterSpec] = [
+    MainParameterSpec(0x00000006, 0x00000002, None),  # OnOff.Toggle
+    MainParameterSpec(0x00000201, 0x00000000, {'mode': 1, 'amount': 5}),  # Thermostat.SetpointRaiseLower.Cool
+    MainParameterSpec(0x00000202, 0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
+    MainParameterSpec(0x00000056, 0x00000000, {'targetTemperature': 22}),  # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are feature-gated & mutually exclusive; targetTemperature covers the common "TN" feature case)
+    MainParameterSpec(0x00000060, 0x00000002, None),  # OperationalState.Start
+    MainParameterSpec(0x00000061, 0x00000003, None),  # RVCOperationalState.Resume
+    MainParameterSpec(0x0000005F, 0x00000001, {'timeToAdd': 30}),  # MicrowaveOvenControl.AddMoreTime
+    MainParameterSpec(0x00000050, 0x00000000, {'newMode': 0}),  # ModeSelect.ChangeToMode
+    MainParameterSpec(0x00000101, 0x00000001, {'PINCode': None}),  # DoorLock.UnlockDoor
+    # MainParameterSpec(0x0000005C, 0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
+    MainParameterSpec(0x00000506, 0x00000000, None),  # MediaPlayback.Play
+    MainParameterSpec(0x00000509, 0x00000000, {'keyCode': 0x44}),  # KeyPadInpud.SendKey.Play
+    MainParameterSpec(0x00000102, 0x00000002, None),  # WindowCovering.StopMotion
+    # MainParameterSpec(0x00000102, 0x00000000, None),  # WindowCovering.UpOrOpen
+    MainParameterSpec(0x00000104, 0x00000000, None),  # ClosureControl.Stop
+    MainParameterSpec(0x00000099, 0x00000001, None),  # EnergyEvse.Disable
+    MainParameterSpec(0x0000009E, 0x00000000, {'newMode': 0}),  # WaterHeaterMode.ChangeToMode
+    MainParameterSpec(0x00000553, 0x00000000, {'streamUsage': 0, 'originatingEndpointID': 0}),  # WebRTCTransportProvider.SolicitOffer
+    MainParameterSpec(0x00000556, 0x00000000, None),  # Chime.PlayChimeSound
+    MainParameterSpec(0x00000081, 0x00000000, None),  # ValveConfigurationAndControl.Open
 ]

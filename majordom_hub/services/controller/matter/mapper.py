@@ -25,6 +25,7 @@ from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
     ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
+    AttributeKey,
     FIELD_TYPE_TO_DATA_TYPE,
     MIN_MAX_VALUE,
     SYSTEM_ATTRIBUTES,
@@ -138,7 +139,7 @@ class MatterMapper:
         """Converts a raw Matter attribute value into ATTRIBUTE_UNITS' base unit, per ATTRIBUTE_SCALE.
         Unwraps the cumulative-energy struct's `energy` field before scaling, since that's the
         only scaled attribute whose SDK value isn't already a plain number."""
-        scale = ATTRIBUTE_SCALE.get((cluster_id, attribute_id))
+        scale = ATTRIBUTE_SCALE.get(AttributeKey(cluster_id, attribute_id))
         if scale is None:
             return value
         if is_dataclass(value) and hasattr(value, "energy"):
@@ -352,7 +353,7 @@ class MatterMapper:
                     valid_values = {m.value: m.name for m in t}
 
             min_value, max_value = self.get_min_max_value(attribute, raw_value)
-            scale = ATTRIBUTE_SCALE.get((cluster_id, attribute_id))
+            scale = ATTRIBUTE_SCALE.get(AttributeKey(cluster_id, attribute_id))
             if scale is not None:
                 min_value = min_value * scale if min_value is not None else None
                 max_value = max_value * scale if max_value is not None else None
@@ -377,8 +378,8 @@ class MatterMapper:
                 min_value=min_value,
                 max_value=max_value,
                 valid_values=valid_values,
-                min_step=ATTRIBUTE_MIN_STEPS.get((cluster_id, attribute_id)),
-                unit=ATTRIBUTE_UNITS.get((cluster_id, attribute_id), ParameterUnit.plain),
+                min_step=ATTRIBUTE_MIN_STEPS.get(AttributeKey(cluster_id, attribute_id)),
+                unit=ATTRIBUTE_UNITS.get(AttributeKey(cluster_id, attribute_id), ParameterUnit.plain),
                 role=role,
                 integration_data=MatterParameterIntegrationData(
                     endpoint_id=endpoint_id,

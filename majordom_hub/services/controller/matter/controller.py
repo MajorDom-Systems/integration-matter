@@ -23,7 +23,7 @@ from majordom_hub.services.controller.framework.abstract_controller import Abstr
 
 from .exceptions import MatterConnectionError, MatterUnexpectedError, MatterUnsupportedParameter, MatterNotFoundParameter
 from .mapper import MatterMapper
-from .matter_spec import MAIN_PARAMETER_BY_CLUSTER
+from .matter_spec import MAIN_PARAMETER_BY_CLUSTER, DefaultParams
 from .model import (
     MatterDevice,
     MatterDeviceIntegrationData,
@@ -352,23 +352,29 @@ class MatterController(AbstractController):
     # Private: node parsing
     # -------------------------------------------------------------------------
 
-    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, dict | int | None]:
+    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, DefaultParams]:
         for endpoint_id, endpoint in node.endpoints.items():
-            for cluster_id, command_id, attr in MAIN_PARAMETER_BY_CLUSTER:
-                if cluster_id not in endpoint.clusters:
+            for spec in MAIN_PARAMETER_BY_CLUSTER:
+                if spec.cluster_id not in endpoint.clusters:
                     continue
 
-                if cluster_id == 0x00000202:  # FanControl
-                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
-                    if supported_attribute_ids and command_id not in supported_attribute_ids:
+                if spec.cluster_id == 0x00000202:  # FanControl
+                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, spec.cluster_id, 0xFFFB) or []
+                    if supported_attribute_ids and spec.command_or_attribute_id not in supported_attribute_ids:
                         continue
-                    return self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, command_id), attr
+                    return (
+                        self._mapper.attribute_parameter_uuid(device_id, endpoint_id, spec.cluster_id, spec.command_or_attribute_id),
+                        spec.default_params,
+                    )
 
-                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
-                if accepted_command_ids and command_id not in accepted_command_ids:
+                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, spec.cluster_id, 0xFFF9) or []
+                if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
                     continue
 
-                return self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, command_id), attr
+                return (
+                    self._mapper.command_parameter_uuid(device_id, endpoint_id, spec.cluster_id, spec.command_or_attribute_id),
+                    spec.default_params,
+                )
         return None, None
 
     # -------------------------------------------------------------------------

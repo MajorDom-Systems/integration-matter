@@ -36,6 +36,7 @@ from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
 from tests.hardware.iot_cage.threaded import ThreadedIotRpc
+from tests.test_controllers.test_matter.helper import flush_ble_cache
 
 pytestmark = [pytest.mark.real_iot_device, pytest.mark.asyncio(loop_scope="session")]
 
@@ -177,6 +178,11 @@ async def power_on_and_settle(iot_cage: ThreadedIotRpc, matter_device_idx: int):
     """Power on the device and give it time to boot and start advertising over mDNS/BLE."""
     await iot_cage.power(matter_device_idx, False)
     await asyncio.sleep(1)
+    # Flush BlueZ's cache while the device is off, so when it powers on and re-advertises
+    # its (possibly static) BLE address, the controller's InterfacesAdded-based discovery
+    # re-fires for it. Must be the last BLE-touching step before commissioning — no scan
+    # in between. Best-effort / host-only; see helper.flush_ble_cache and the matter readme.
+    flush_ble_cache()
     await iot_cage.power(matter_device_idx, True)
     await asyncio.sleep(10)  # TODO(hardware): tune to the real DUT's actual boot time
 

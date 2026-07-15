@@ -1,6 +1,8 @@
 import asyncio
 import pytest
 import random
+import subprocess
+import time
 
 from uuid import UUID
 from aiohttp import ClientSession
@@ -117,6 +119,34 @@ def generate_value(field: dict):
     # unknown data_type without valid_values/min/max — should not happen for control attributes;
     # fail loudly instead of silently sending None
     raise ValueError(f"Cannot generate test value for field {field.get('name')} with data_type={data_type}")
+
+def flush_ble_cache() -> None:
+    """Flush BlueZ's device cache and restart bluetoothd.
+
+    Matter's BLE discovery listens for BlueZ's ``InterfacesAdded`` ("new device")
+    D-Bus signal. A device advertising a *static* BLE address that is already in
+    BlueZ's cache never re-fires that signal, so the controller never discovers it
+    (see majordom_hub/services/controller/matter/readme.md). Clearing the cache makes
+    the device look new again on its next advert.
+
+    Best-effort: needs host ``bluetoothctl`` and permission to restart bluetooth, so it
+    silently no-ops where those aren't available (e.g. inside an unprivileged container).
+    The reliable place to run it is the host runner — see the matter-hardware workflow.
+
+    IMPORTANT: do NOT run any BLE scan between calling this and commissioning; a scan
+    re-caches the device and re-consumes the ``InterfacesAdded`` signal.
+    """
+    try:
+        listed = subprocess.run(["bluetoothctl", "devices"], capture_output=True, text=True, timeout=10)
+        for line in listed.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "Device":
+                subprocess.run(["bluetoothctl", "remove", parts[1]], capture_output=True, timeout=10)
+        subprocess.run(["systemctl", "restart", "bluetooth"], capture_output=True, timeout=20)
+        time.sleep(2)  # let bluetoothd come back up before the device advertises
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+
 
 def flatten_exception_group(exception) -> list[Exception]:
     exceptions = list()

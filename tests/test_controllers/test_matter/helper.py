@@ -201,23 +201,35 @@ def flush_ble_cache() -> None:
     (see majordom_hub/services/controller/matter/readme.md). Clearing the cache makes
     the device look new again on its next advert.
 
-    Best-effort: needs host ``bluetoothctl`` and permission to restart bluetooth, so it
-    silently no-ops where those aren't available (e.g. inside an unprivileged container).
-    The reliable place to run it is the host runner — see the matter-hardware workflow.
+    Best-effort: needs ``bluetoothctl`` talking to a BlueZ adapter, so it silently no-ops
+    where that's unavailable. Works both on the host and inside the hardware-test container
+    (host D-Bus mounted): to reset the discovery state it prefers a full ``bluetoothd`` restart
+    (host), falling back to an adapter power-cycle over D-Bus when there's no systemd (container).
 
     IMPORTANT: do NOT run any BLE scan between calling this and commissioning; a scan
     re-caches the device and re-consumes the ``InterfacesAdded`` signal.
     """
-    try:
-        listed = subprocess.run(["bluetoothctl", "devices"], capture_output=True, text=True, timeout=10)
-        for line in listed.stdout.splitlines():
-            parts = line.split()
-            if len(parts) >= 2 and parts[0] == "Device":
-                subprocess.run(["bluetoothctl", "remove", parts[1]], capture_output=True, timeout=10)
-        subprocess.run(["systemctl", "restart", "bluetooth"], capture_output=True, timeout=20)
-        time.sleep(2)  # let bluetoothd come back up before the device advertises
-    except (FileNotFoundError, subprocess.SubprocessError):
-        pass
+    def _run(cmd: list[str]) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return None
+
+    listed = _run(["bluetoothctl", "devices"])
+    if listed is None:
+        return  # no bluetoothctl at all — nothing we can do
+    for line in (listed.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "Device":
+            _run(["bluetoothctl", "remove", parts[1]])
+    # Best-effort full reset. On a host this restarts bluetoothd (the Matter server's noble
+    # backend reconnects within a few seconds). Inside the hardware-test container there's no
+    # systemd, so this no-ops — and we deliberately do NOT power-cycle the adapter as a fallback:
+    # that yanks the shared adapter out from under the running matter-server and breaks ITS BLE
+    # discovery. The container relies on a host-level `systemctl restart bluetooth` done before the
+    # run (see the matter-hardware workflow) plus the device removals above.
+    _run(["systemctl", "restart", "bluetooth"])
+    time.sleep(2)  # let the adapter settle before the device advertises
 
 
 def flatten_exception_group(exception) -> list[Exception]:

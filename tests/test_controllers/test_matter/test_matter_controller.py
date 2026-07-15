@@ -73,10 +73,13 @@ async def test_pair_device(start_mvd, async_client, crud, get_user_bearer):
         await helper.unpair_mvd()
 
 @pytest.mark.asyncio
-async def test_control_all_attributes(start_all_mvd, async_client_ws_connect, async_client, crud, get_user_bearer):
+async def test_control_all_attributes(mock_matter_discovery, start_all_mvd, async_client_ws_connect, async_client, crud, get_user_bearer):
     """
     Iterates over all setting-visible attributes on the device and verifies
     that each one can be sent and produces a majordom_did_receive_event response.
+
+    Discovery is mocked (see mock_matter_discovery) — this test covers attribute
+    mapping + control, not the mDNS discovery path (that's test_discover_*).
     """
     user = await crud.create_user()
     room = await crud.create_room()
@@ -155,10 +158,13 @@ async def test_control_all_attributes(start_all_mvd, async_client_ws_connect, as
 
 
 @pytest.mark.asyncio
-async def test_control_all_commands(start_all_mvd, async_client_ws_connect, async_client, crud, get_user_bearer):
+async def test_control_all_commands(mock_matter_discovery, start_all_mvd, async_client_ws_connect, async_client, crud, get_user_bearer):
     """
     Iterates over all user-visible commands on the device and verifies
     that each one can be sent and produces a majordom_did_receive_event response.
+
+    Discovery is mocked (see mock_matter_discovery) — this test covers command
+    mapping + control, not the mDNS discovery path (that's test_discover_*).
     """
     proc, device_type = start_all_mvd
     user = await crud.create_user()

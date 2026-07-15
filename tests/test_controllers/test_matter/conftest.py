@@ -5,6 +5,9 @@ import os
 import subprocess
 import signal
 import tempfile
+from unittest.mock import AsyncMock, patch
+
+from matter_server.common.models import CommissionableNodeData
 
 from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd
 
@@ -84,3 +87,48 @@ async def pair_unpair_mvd(code: str = "20202021"):
         await unpair_mvd()
     except Exception as e:
         print(str(e))
+
+
+# Fields for a synthetic commissionable node, standing in for whatever the real mDNS browse
+# would have returned. Its only job is to make ONE discovery appear so a test can grab a
+# discovery_id and POST it — every MVD advertises the same discriminator/passcode, and the
+# discovery payload isn't what the coverage tests assert on, so a fixed stub is fine.
+# Kept as plain kwargs (not a constructed CommissionableNodeData) so nothing matter-server-
+# specific runs at collection time — the dataclass is only built inside the fixture below,
+# so a field mismatch on some matter_server version can't break collection of the whole
+# directory (which would take the hardware tests down with it).
+_MOCK_COMMISSIONABLE_NODE_KWARGS = dict(
+    instance_name="MOCKMVD00000001",
+    vendor_id=0xFFF1,
+    product_id=0x8000,
+    commissioning_mode=1,          # 1 = open for commissioning → credentials type "code"
+    device_type=0,
+    device_name="Mock MVD",
+    addresses=["fe80::1"],         # non-empty → transport "IP" (not "BLE")
+    pairing_hint=0,
+    pairing_instruction="",
+)
+
+
+@pytest.fixture(scope="function")
+def mock_matter_discovery():
+    """Replace the real mDNS browse with an instant synthetic discovery.
+
+    The parametrized coverage tests (test_control_all_*) exist to verify attribute/command
+    *mapping*, not discovery. The device schema they assert on comes from commission_on_network
+    (which stays REAL against the running MVD) — the mDNS browse only supplies a discovery_id
+    to POST. That browse is the slow, flaky part under emulation / across the docker bridge
+    (measured 3.7–7.6s and prone to timing out), so here we patch matter-server's
+    `discover_commissionable_nodes` to return the stub above immediately and deterministically.
+    Pairing and command control still run for real.
+
+    Set up before the coordinator (put it first in the test signature) so the patch is live
+    when MatterController.start() kicks off its discovery loop.
+    """
+    node = CommissionableNodeData(**_MOCK_COMMISSIONABLE_NODE_KWARGS)
+    with patch(
+        "matter_server.client.client.MatterClient.discover_commissionable_nodes",
+        new_callable=AsyncMock,
+        return_value=[node],
+    ):
+        yield

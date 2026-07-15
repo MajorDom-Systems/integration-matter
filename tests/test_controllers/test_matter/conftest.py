@@ -9,7 +9,24 @@ from unittest.mock import AsyncMock, patch
 
 from matter_server.common.models import CommissionableNodeData
 
+from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
+from majordom_hub.coordinator import Coordinator
 from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd
+
+
+@pytest_asyncio.fixture
+async def coordinator(cloud_service_mock, credentials_repo_mock):
+    """Override the root coordinator to re-enable MatterController.
+
+    Matter is in VIRTUAL_DISABLED_SERVICES (off in virtual/demo mode and by default in
+    tests), so the matter tests turn it back on here — mirroring how the zigbee/homekit
+    conftests re-enable their own controllers. Reuses the root cloud/credentials mocks.
+    """
+    with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
+        c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"MatterController"}))
+        await c.start(wait_forever=False)
+        yield c
+        await c.stop()
 
 
 # Node ids that need more than the function-level @pytest.mark.flaky(reruns=1). door-lock is

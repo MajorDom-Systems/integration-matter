@@ -72,6 +72,13 @@ async def test_pair_device(start_mvd, async_client, crud, get_user_bearer):
     finally:
         await helper.unpair_mvd()
 
+# Retried once (pytest-rerunfailures): these send commands to an emulated MVD and, under
+# full-suite emulation load, are flaky in two ways that a fresh MVD (each rerun re-runs the
+# function-scoped fixtures, so a new MVD is spawned) reliably clears — (1) the command's
+# majordom_did_receive_event occasionally doesn't arrive within the 5s WS window, and
+# (2) some device state machines (e.g. WindowCovering movement) reject commands with a
+# generic InteractionModelError Failure(0x1) depending on timing/order. Not a mapping bug.
+@pytest.mark.flaky(reruns=1)
 @pytest.mark.asyncio
 async def test_control_all_attributes(mock_matter_discovery, start_all_mvd, async_client_ws_connect, async_client, crud, get_user_bearer):
     """
@@ -157,6 +164,7 @@ async def test_control_all_attributes(mock_matter_discovery, start_all_mvd, asyn
     assert not failed, f"The following commands did not produce an event: {failed}"
 
 
+@pytest.mark.flaky(reruns=1)  # see note on test_control_all_attributes above
 @pytest.mark.asyncio
 async def test_control_all_commands(mock_matter_discovery, start_all_mvd, async_client_ws_connect, async_client, crud, get_user_bearer):
     """

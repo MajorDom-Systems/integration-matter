@@ -20,6 +20,7 @@ from majordom_hub.schemas.command import DeviceCommand
 from majordom_hub.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_hub.schemas.parameter import ParameterRole
 from majordom_hub.services.controller.framework.abstract_controller import AbstractController
+from majordom_hub.services.controller.framework.discovery.ble_discovery import BLEDiscoveryInfo, BLEDiscoveryService
 
 from .exceptions import MatterConnectionError, MatterUnexpectedError, MatterUnsupportedParameter, MatterNotFoundParameter
 from .mapper import MatterMapper
@@ -39,6 +40,12 @@ class MatterController(AbstractController):
     _matter_client_session: ClientSession
     _majordom_descoveries: dict[UUID, Discovery] = dict()
     _mapper = MatterMapper()
+
+    # Matter commissionable BLE service (spec 5.4.2.5.6) — devices in commissioning mode advertise
+    # this service + its service-data payload. discover_commissionable_nodes only surfaces IP/mDNS
+    # devices, so BLE-only devices (a factory-fresh bulb not yet on any network) are discovered here
+    # via the shared BLE scanner instead.
+    _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -79,6 +86,11 @@ class MatterController(AbstractController):
 
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
+        # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
+        # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.
+        self._ble_addresses: dict[UUID, set[str]] = {}  # discovery_id -> live BLE addresses
+        self._ble_cancel = self.dependencies.ble_discovery_service.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
+
         device_nodes: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
             for device in await device_repository.get_all(self.name, MatterDevice):
@@ -110,6 +122,10 @@ class MatterController(AbstractController):
 
     async def stop(self):
         self._majordom_descoveries.clear()
+
+        if cancel := getattr(self, "_ble_cancel", None):
+            cancel()
+            self._ble_cancel = None
 
         # Cancel the discovery loop and listener started in start() — otherwise they keep
         # running against a matter client/event loop that stop() is about to tear down,
@@ -155,9 +171,15 @@ class MatterController(AbstractController):
                 f"types this discovery advertised: {discovery.expected_credentials_options}"
             )
 
-        if credentials.type is CredentialsType.qr:
+        # Compare by value (==), not identity (is): `credentials.type` arrives through the
+        # API/schema layer, which resolves CredentialsType via the `schemas.device` import
+        # path, while this module imports it as `majordom_hub.schemas.device` — the repo's
+        # dual pythonpath makes those two *distinct* enum classes, so `is` would never match
+        # even for the same member. `==` on a str-enum compares the underlying value and is
+        # robust to that (and semantically what we want anyway).
+        if credentials.type == CredentialsType.qr:
             commission_node = await self._matter_client.commission_with_code(str(credentials.value))
-        elif credentials.type is CredentialsType.code:
+        elif credentials.type == CredentialsType.code:
             if discovery.transport == "BLE":
                 # commission_on_network only works for devices already reachable over IP
                 # (matter-server's own docstring: "for advanced usecases only, use
@@ -412,6 +434,68 @@ class MatterController(AbstractController):
             device_name=NonEmptyStr(node.device_name or node.instance_name or "Unknown"),
             device_manufacturer=f"Vendor {node.vendor_id}" if node.vendor_id else None,
             device_category=str(node.device_type),
+            device_icon=None,
+        )
+        self._majordom_descoveries[discovery_id] = discovery
+        await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+
+    # -------------------------------------------------------------------------
+    # Private: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP
+    # -------------------------------------------------------------------------
+
+    async def ble_did_discover_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
+        await self._matter_did_discover_ble(info)
+
+    async def ble_did_update_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
+        await self._matter_did_discover_ble(info)
+
+    async def ble_did_remove_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
+        # Intentionally keep the discovery. Commissionable devices rotate their BLE address while the
+        # window is open (~minutes), so the scanner's short not-seen eviction (~11s) fires constantly
+        # even while the device is very much present — dropping the discovery here would race
+        # commissioning. pair_device removes it on success; stop() clears the rest.
+        return
+
+    def _ble_discovery_id(self, discriminator: int, vendor_id: int, product_id: int) -> UUID:
+        # Stable across the device's (possibly changing) BLE address and across mDNS re-discovery
+        # after it joins Thread — keyed on the commissioning identity, not the transport address.
+        return self._mapper.matter_id_to_uuid(f"ble_{vendor_id:04x}_{product_id:04x}_{discriminator:03x}")
+
+    @staticmethod
+    def _parse_commissionable_ble(info: BLEDiscoveryInfo) -> tuple[int, int, int] | None:
+        """Decode a Matter commissionable BLE advert's service-data payload → (discriminator, vid, pid).
+
+        Payload (Matter spec 5.4.2.5.6): [0]=opcode(0x00 Commissionable), [1:3]=discriminator (u16 LE,
+        low 12 bits), [3:5]=vendor id (u16 LE), [5:7]=product id (u16 LE), [7]=additional-data flag.
+        """
+        data = info.advertisement.service_data.get("0000fff6-0000-1000-8000-00805f9b34fb")
+        if not data or len(data) < 7 or data[0] != 0x00:
+            return None
+        discriminator = (data[1] | (data[2] << 8)) & 0x0FFF
+        vendor_id = data[3] | (data[4] << 8)
+        product_id = data[5] | (data[6] << 8)
+        return discriminator, vendor_id, product_id
+
+    async def _matter_did_discover_ble(self, info: BLEDiscoveryInfo):
+        parsed = self._parse_commissionable_ble(info)
+        if not parsed:
+            return
+        discriminator, vendor_id, product_id = parsed
+        discovery_id = self._ble_discovery_id(discriminator, vendor_id, product_id)
+        self._ble_addresses.setdefault(discovery_id, set()).add(info.device.address)
+        if discovery_id in self._majordom_descoveries:
+            return  # already advertised; the device keeps beaconing while its window is open
+        discovery = Discovery(
+            id=discovery_id,
+            integration=NonEmptyStr(self.name),
+            # A commissionable device accepts its manual pairing code (or QR). pair_device's BLE
+            # branch feeds the code to commission_with_code, which does its own BLE scan by discriminator.
+            expected_credentials_options=[CredentialsType.code.with_mask("DDDD-DDD-DDDD"), CredentialsType.qr],
+            expiration=None,
+            transport=NonEmptyStr("BLE"),
+            device_name=NonEmptyStr(info.advertisement.local_name or f"Matter {vendor_id:04x}:{product_id:04x}"),
+            device_manufacturer=f"Vendor {vendor_id}",
+            device_category=None,
             device_icon=None,
         )
         self._majordom_descoveries[discovery_id] = discovery

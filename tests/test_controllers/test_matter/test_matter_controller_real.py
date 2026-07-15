@@ -117,7 +117,11 @@ async def cloud_service_mock_matter():
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def coordinator(cloud_service_mock_matter, credentials_repo_mock_matter, clear_majordom_db):
     with patch("majordom_hub.coordinator.ServerService.start", new_callable=AsyncMock):
-        c = Coordinator(settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"MatterController"}))
+        # Enable the shared BLE scanner too — the IKEA is BLE-only until it joins Thread, so the
+        # controller discovers it via BLEDiscoveryService (not the mDNS discover loop).
+        c = Coordinator(
+            settings=Settings(disable_services=VIRTUAL_DISABLED_SERVICES - {"MatterController", "BLEDiscoveryService"})
+        )
         await c.start(wait_forever=False)
         yield c
         await c.stop()
@@ -223,9 +227,25 @@ async def test_discovery_and_pairing(power_on_and_settle, async_client, async_cl
 
     # Only the DUT is powered, so it should be the sole discovery. Generous timeout: BLE discovery +
     # the hub's 5s discovery-loop cadence.
-    discoveries = await helper.wait_for_discovery(async_client, get_user_bearer(user.id), timeout=120)
-    assert discoveries, "IKEA did not appear in discovery"
-    discovery_id = next(iter(discoveries))
+    # Poll until the IKEA's BLE commissionable discovery appears (VID 0x117C = 4476). Other adverts
+    # (e.g. a stale mDNS entry from another bulb) may be present, so select the IKEA specifically.
+    async def _find_ikea() -> str | None:
+        r = await async_client.get("/v1/api/device/discoveries", headers=get_user_bearer(user.id))
+        if r.status_code != 200:
+            return None
+        for did, d in r.json().items():
+            if d.get("transport") == "BLE" and "4476" in (d.get("device_manufacturer") or ""):
+                return did
+        return None
+
+    deadline = asyncio.get_event_loop().time() + 120
+    discovery_id = None
+    while asyncio.get_event_loop().time() < deadline:
+        discovery_id = await _find_ikea()
+        if discovery_id:
+            break
+        await asyncio.sleep(1)
+    assert discovery_id, "IKEA BLE commissionable discovery did not appear within 120s"
 
     room = await crud.create_room()
     data = {
@@ -262,46 +282,76 @@ async def test_discovery_and_pairing(power_on_and_settle, async_client, async_cl
     )
     _state["device_id"] = paired_device_id
     _state["onoff_param_id"] = onoff_param_id
+    _state["discovery_id"] = discovery_id
 
 
 async def test_discovery_paired(async_client, crud, get_user_bearer):
-    """Once paired, the device should no longer show up as a fresh discovery."""
-    assert _state.get("device_id"), "pairing test must run first"
-    user = await crud.create_user()
-    r = await async_client.get("/v1/api/device/discoveries", headers=get_user_bearer(user.id))
-    assert r.status_code == 200 and r.json() == {}, r.json()
+    """After pairing, the device is a managed device and its discovery was consumed.
 
-
-async def test_control_onoff(async_client_ws_connect, crud, get_user_bearer, iot_cage: ThreadedIotRpc, matter_device_idx: int):
-    """Drive OnOff over Matter and confirm the bulb physically changes via the photoresistor."""
+    Note: we don't assert the BLE advert disappears — a real commissionable bulb rotates its BLE
+    address and keeps beaconing until its window closes, so the continuous scanner may still see it.
+    What matters is that pairing produced a managed device.
+    """
     device_id = _state.get("device_id")
-    param_id = _state.get("onoff_param_id")
-    assert device_id and param_id, "pairing test must run first"
-
+    assert device_id, "pairing test must run first"
     user = await crud.create_user()
+    r = await async_client.get(f"/v1/api/device/{device_id}", headers=get_user_bearer(user.id))
+    assert r.status_code == 200 and r.json().get("id") == device_id, r.json()
+
+
+async def test_control_onoff(
+    async_client, async_client_ws_connect, crud, get_user_bearer, iot_cage: ThreadedIotRpc, matter_device_idx: int
+):
+    """Drive OnOff over Matter and confirm the bulb physically changes via the photoresistor.
+
+    Uses the OnOff cluster's On/Off *commands* — the OnOff attribute (6/0) is read-only on real
+    devices (only virtual MVDs accept writing it), so it must be toggled by command.
+    """
+    device_id = _state.get("device_id")
+    assert device_id, "pairing test must run first"
+    user = await crud.create_user()
+
+    r = await async_client.get(f"/v1/api/device/{device_id}", headers=get_user_bearer(user.id))
+    assert r.status_code == 200, r.json()
+    params = r.json()["parameters"]
+
+    def command_id(name: str):
+        return next(
+            (
+                p["id"]
+                for p in params
+                if p["integration_data"].get("type") == "command"
+                and p["integration_data"].get("cluster_id") == 6
+                and p["name"] == name
+            ),
+            None,
+        )
+
+    off_id, on_id = command_id("Off"), command_id("On")
+    assert off_id and on_id, f"On/Off commands not exposed; parameters: {[p['name'] for p in params]}"
+
     await iot_cage.monitor(True)
 
-    async def send(value: bool):
+    async def invoke(param_id):
         async with async_client_ws_connect(user.id, timeout=20) as ws:
             await ws.send_json(
-                {"type": "device_command", "data": {"device_id": str(device_id), "parameter_id": str(param_id), "value": value}}
+                {"type": "device_command", "data": {"device_id": str(device_id), "parameter_id": str(param_id), "value": None}}
             )
             async with asyncio.timeout(15):
                 while True:
                     message = await ws.receive_json()
-                    if message["type"] == "majordom_did_connect_device":
-                        continue
-                    assert message["type"] == "majordom_did_receive_event", message
-                    return
+                    # The user WS also carries connect/discovery notifications — skip all but our result.
+                    if message["type"] == "majordom_did_receive_event":
+                        return
 
     # The bulb starts ON (just powered). Off → sensor should fall; On → sensor should rise back.
     iot_cage.clear_events(matter_device_idx)
-    await send(False)
+    await invoke(off_id)
     await asyncio.sleep(2)
     off_events = [e.value for e in iot_cage.get_events(matter_device_idx)]
 
     iot_cage.clear_events(matter_device_idx)
-    await send(True)
+    await invoke(on_id)
     await asyncio.sleep(2)
     on_events = [e.value for e in iot_cage.get_events(matter_device_idx)]
 

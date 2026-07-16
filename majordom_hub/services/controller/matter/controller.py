@@ -36,10 +36,24 @@ from .model import (
 
 
 class MatterController(AbstractController):
+    """Bridges the Hub to Matter devices through a Matter controller server (matter-server).
+
+    matter-server owns the Matter fabric, the Thread/BLE radios, and commissioning; this
+    controller adapts it to the Hub's AbstractController contract, talking to it over its
+    WebSocket API. On-network devices are discovered via matter-server; BLE-only commissionable
+    devices are discovered via the Hub's shared BLE service. See readme.md.
+    """
+
     _matter_client: MatterClient
     _matter_client_session: ClientSession
     _majordom_descoveries: dict[UUID, Discovery]
     _mapper: MatterMapper
+
+    # Matter commissionable BLE service (spec 5.4.2.5.6) — devices in commissioning mode advertise
+    # this service + its service-data payload. discover_commissionable_nodes only surfaces IP/mDNS
+    # devices, so BLE-only devices (a factory-fresh bulb not yet on any network) are discovered here
+    # via the shared BLE scanner instead.
+    _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
     def __init__(self, dependencies: AbstractController.Dependencies):
         super().__init__(dependencies)
@@ -47,12 +61,6 @@ class MatterController(AbstractController):
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
         self._majordom_descoveries = dict()
-
-    # Matter commissionable BLE service (spec 5.4.2.5.6) — devices in commissioning mode advertise
-    # this service + its service-data payload. discover_commissionable_nodes only surfaces IP/mDNS
-    # devices, so BLE-only devices (a factory-fresh bulb not yet on any network) are discovered here
-    # via the shared BLE scanner instead.
-    _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -172,22 +180,7 @@ class MatterController(AbstractController):
         await self._matter_client_session.close()
 
     # -------------------------------------------------------------------------
-    # Private: guards
-    # -------------------------------------------------------------------------
-
-    def _require_matter_client(self) -> MatterClient:
-        if not self._matter_client:
-            raise MatterConnectionError("Matter client is not started")
-        return self._matter_client
-
-    def _require_node(self, device: MatterDevice) -> MatterNode:
-        node = self._require_matter_client().get_node(device.node_id)
-        if not node:
-            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
-        return node
-
-    # -------------------------------------------------------------------------
-    # Public device operations
+    # Hub -> device operations
     # -------------------------------------------------------------------------
 
     async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None):
@@ -343,92 +336,7 @@ class MatterController(AbstractController):
             raise exception_class(f"Command '{parameter.name}' failed: {message}")
 
     # -------------------------------------------------------------------------
-    # Private: command execution and attribute writing
-    # -------------------------------------------------------------------------
-
-    async def _execute_cluster_command(
-        self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
-    ):
-        command_id = parameter.integration_data.command_id
-        time_requested_timeout = None
-        if command_id is None or command_id < 0:
-            raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
-
-        if not hasattr(cluster, "Commands"):
-            return
-
-        for _, cmd_class in inspect.getmembers(cluster.Commands, inspect.isclass):
-            if not issubclass(cmd_class, ClusterCommand):
-                continue
-            if getattr(cmd_class, "command_id", -1) != command_id:
-                continue
-
-            # Only send client-side commands
-            if not getattr(cmd_class, "is_client", True):
-                continue
-
-            if cluster.id == 0x00000101:  # DoorLock
-                time_requested_timeout=1000
-            if isinstance(command.value, dict):
-                data = self._mapper.parse_data_for_command(cmd_class, command.value)
-                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**data), timed_request_timeout_ms=time_requested_timeout)
-            else:
-                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(), timed_request_timeout_ms=time_requested_timeout)
-            return
-
-    async def _write_cluster_attribute(
-        self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand
-    ):
-        if parameter.role != ParameterRole.control:
-            raise MatterUnexpectedError(f"Parameter '{parameter.name}' is not writable")
-    
-        attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
-        if attribute_path not in node.node_data.attributes:
-            return
-    
-        endpoint = node.endpoints[endpoint_id]
-        cluster = endpoint.clusters[cluster_id]
-        attribute_cls = next(
-            (a for _, a in inspect.getmembers(cluster.Attributes, inspect.isclass)
-             if issubclass(a, ClusterAttributeDescriptor)
-             and getattr(a, "attribute_id", -1) == parameter.integration_data.attribute_id),
-            None
-        )
-    
-        value = self._mapper.parse_data_for_attribute(attribute_cls, command.value) if attribute_cls else command.value
-        await self._matter_client.write_attribute(node.node_id, attribute_path, value)
-
-    # -------------------------------------------------------------------------
-    # Private: node parsing
-    # -------------------------------------------------------------------------
-
-    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, DefaultParams]:
-        for endpoint_id, endpoint in node.endpoints.items():
-            for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
-                if cluster_id not in endpoint.clusters:
-                    continue
-
-                if cluster_id == 0x00000202:  # FanControl
-                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
-                    if supported_attribute_ids and spec.command_or_attribute_id not in supported_attribute_ids:
-                        continue
-                    return (
-                        self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, spec.command_or_attribute_id),
-                        spec.default_params,
-                    )
-
-                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
-                if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
-                    continue
-
-                return (
-                    self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, spec.command_or_attribute_id),
-                    spec.default_params,
-                )
-        return None, None
-
-    # -------------------------------------------------------------------------
-    # Private: discovery (mDNS / on-network)
+    # Device -> Hub: discovery (mDNS / on-network)
     # -------------------------------------------------------------------------
 
     async def _matter_discovery_loop(self, interval: int = 5):
@@ -475,7 +383,7 @@ class MatterController(AbstractController):
         await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
-    # Private: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP
+    # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP
     # -------------------------------------------------------------------------
 
     async def ble_did_discover_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
@@ -490,26 +398,6 @@ class MatterController(AbstractController):
         # even while the device is very much present — dropping the discovery here would race
         # commissioning. pair_device removes it on success; stop() clears the rest.
         return
-
-    def _ble_discovery_id(self, discriminator: int, vendor_id: int, product_id: int) -> UUID:
-        # Stable across the device's (possibly changing) BLE address and across mDNS re-discovery
-        # after it joins Thread — keyed on the commissioning identity, not the transport address.
-        return self._mapper.discovery_uuid(f"ble_{vendor_id:04x}_{product_id:04x}_{discriminator:03x}")
-
-    @staticmethod
-    def _parse_commissionable_ble(info: BLEDiscoveryInfo) -> tuple[int, int, int] | None:
-        """Decode a Matter commissionable BLE advert's service-data payload → (discriminator, vid, pid).
-
-        Payload (Matter spec 5.4.2.5.6): [0]=opcode(0x00 Commissionable), [1:3]=discriminator (u16 LE,
-        low 12 bits), [3:5]=vendor id (u16 LE), [5:7]=product id (u16 LE), [7]=additional-data flag.
-        """
-        data = info.advertisement.service_data.get("0000fff6-0000-1000-8000-00805f9b34fb")
-        if not data or len(data) < 7 or data[0] != 0x00:
-            return None
-        discriminator = (data[1] | (data[2] << 8)) & 0x0FFF
-        vendor_id = data[3] | (data[4] << 8)
-        product_id = data[5] | (data[6] << 8)
-        return discriminator, vendor_id, product_id
 
     async def _matter_did_discover_ble(self, info: BLEDiscoveryInfo):
         parsed = self._parse_commissionable_ble(info)
@@ -536,8 +424,28 @@ class MatterController(AbstractController):
         self._majordom_descoveries[discovery_id] = discovery
         await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 
+    @staticmethod
+    def _parse_commissionable_ble(info: BLEDiscoveryInfo) -> tuple[int, int, int] | None:
+        """Decode a Matter commissionable BLE advert's service-data payload → (discriminator, vid, pid).
+
+        Payload (Matter spec 5.4.2.5.6): [0]=opcode(0x00 Commissionable), [1:3]=discriminator (u16 LE,
+        low 12 bits), [3:5]=vendor id (u16 LE), [5:7]=product id (u16 LE), [7]=additional-data flag.
+        """
+        data = info.advertisement.service_data.get("0000fff6-0000-1000-8000-00805f9b34fb")
+        if not data or len(data) < 7 or data[0] != 0x00:
+            return None
+        discriminator = (data[1] | (data[2] << 8)) & 0x0FFF
+        vendor_id = data[3] | (data[4] << 8)
+        product_id = data[5] | (data[6] << 8)
+        return discriminator, vendor_id, product_id
+
+    def _ble_discovery_id(self, discriminator: int, vendor_id: int, product_id: int) -> UUID:
+        # Stable across the device's (possibly changing) BLE address and across mDNS re-discovery
+        # after it joins Thread — keyed on the commissioning identity, not the transport address.
+        return self._mapper.discovery_uuid(f"ble_{vendor_id:04x}_{product_id:04x}_{discriminator:03x}")
+
     # -------------------------------------------------------------------------
-    # Private: subscriptions
+    # Device -> Hub: subscriptions & availability
     # -------------------------------------------------------------------------
 
     def _subscription(self, device_id: UUID, node: MatterNode):
@@ -597,3 +505,95 @@ class MatterController(AbstractController):
             else:
                 asyncio.create_task(self.dependencies.output.controller_did_lose_device(self, device_id))
         return callback
+
+    # -------------------------------------------------------------------------
+    # Private helpers
+    # -------------------------------------------------------------------------
+
+    def _require_matter_client(self) -> MatterClient:
+        if not self._matter_client:
+            raise MatterConnectionError("Matter client is not started")
+        return self._matter_client
+
+    def _require_node(self, device: MatterDevice) -> MatterNode:
+        node = self._require_matter_client().get_node(device.node_id)
+        if not node:
+            raise MatterUnexpectedError(f"Node for device {device.node_id} not found")
+        return node
+
+    async def _execute_cluster_command(
+        self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
+    ):
+        command_id = parameter.integration_data.command_id
+        time_requested_timeout = None
+        if command_id is None or command_id < 0:
+            raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
+
+        if not hasattr(cluster, "Commands"):
+            return
+
+        for _, cmd_class in inspect.getmembers(cluster.Commands, inspect.isclass):
+            if not issubclass(cmd_class, ClusterCommand):
+                continue
+            if getattr(cmd_class, "command_id", -1) != command_id:
+                continue
+
+            # Only send client-side commands
+            if not getattr(cmd_class, "is_client", True):
+                continue
+
+            if cluster.id == 0x00000101:  # DoorLock
+                time_requested_timeout=1000
+            if isinstance(command.value, dict):
+                data = self._mapper.parse_data_for_command(cmd_class, command.value)
+                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**data), timed_request_timeout_ms=time_requested_timeout)
+            else:
+                await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(), timed_request_timeout_ms=time_requested_timeout)
+            return
+
+    async def _write_cluster_attribute(
+        self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand
+    ):
+        if parameter.role != ParameterRole.control:
+            raise MatterUnexpectedError(f"Parameter '{parameter.name}' is not writable")
+    
+        attribute_path = f"{endpoint_id}/{cluster_id}/{parameter.integration_data.attribute_id}"
+        if attribute_path not in node.node_data.attributes:
+            return
+    
+        endpoint = node.endpoints[endpoint_id]
+        cluster = endpoint.clusters[cluster_id]
+        attribute_cls = next(
+            (a for _, a in inspect.getmembers(cluster.Attributes, inspect.isclass)
+             if issubclass(a, ClusterAttributeDescriptor)
+             and getattr(a, "attribute_id", -1) == parameter.integration_data.attribute_id),
+            None
+        )
+    
+        value = self._mapper.parse_data_for_attribute(attribute_cls, command.value) if attribute_cls else command.value
+        await self._matter_client.write_attribute(node.node_id, attribute_path, value)
+
+    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, DefaultParams]:
+        for endpoint_id, endpoint in node.endpoints.items():
+            for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
+                if cluster_id not in endpoint.clusters:
+                    continue
+
+                if cluster_id == 0x00000202:  # FanControl
+                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
+                    if supported_attribute_ids and spec.command_or_attribute_id not in supported_attribute_ids:
+                        continue
+                    return (
+                        self._mapper.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, spec.command_or_attribute_id),
+                        spec.default_params,
+                    )
+
+                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
+                if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
+                    continue
+
+                return (
+                    self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, spec.command_or_attribute_id),
+                    spec.default_params,
+                )
+        return None, None

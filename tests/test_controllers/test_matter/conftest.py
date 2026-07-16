@@ -94,20 +94,52 @@ async def _start_mvd(device_type: str) -> subprocess.Popen:
         pytest.fail(f"MVD binary '{device_type}' exited immediately (code {proc.returncode}): {stderr}")
     return proc
 
+
+def _kill_mvd(proc: subprocess.Popen) -> None:
+    """Terminate the MVD process group and WAIT for it to actually die.
+
+    Each MVD binds a pw_rpc server on a fixed port (33000). If teardown only signals it and
+    returns, on a fast (non-emulated) runner the next test's MVD spawns before the previous
+    one has released the port and crashes with a pw_rpc Listen() failure (SIGSEGV). Waiting
+    for death frees the port — and, since every MVD advertises the same discriminator/passcode,
+    also guarantees only one device is ever live at a time. SIGTERM first (clean shutdown),
+    escalating to SIGKILL if it doesn't exit promptly.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except ProcessLookupError:
+        return  # already gone
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # nothing more we can do; let the fixture finish
+
+
+async def _stop_mvd(proc: subprocess.Popen) -> None:
+    # Run the (blocking) kill+wait off the event loop so a slow shutdown doesn't stall it.
+    await asyncio.get_running_loop().run_in_executor(None, _kill_mvd, proc)
+
 @pytest_asyncio.fixture(scope="function", params=get_all_devices())
 async def start_all_mvd(request):
     device_type = request.param
     proc = await _start_mvd(device_type)
     yield proc, device_type
     await unpair_mvd()
-    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    await _stop_mvd(proc)
 
 @pytest_asyncio.fixture(scope="function")
 async def start_mvd():
     proc = await _start_mvd("on-off-light")
     yield proc
     await unpair_mvd()
-    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    await _stop_mvd(proc)
 
 @pytest_asyncio.fixture(scope="function")
 async def start_mvd_with_pairing():
@@ -115,7 +147,7 @@ async def start_mvd_with_pairing():
     await pair_mvd()
     yield proc
     await unpair_mvd()
-    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    await _stop_mvd(proc)
 
 
 @pytest_asyncio.fixture(scope="function")

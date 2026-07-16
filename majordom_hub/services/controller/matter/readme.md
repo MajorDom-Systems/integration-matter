@@ -1,8 +1,37 @@
 # Matter integration
 
 The hub talks to a **Matter controller server** over its WebSocket API (`ws://<host>:5580/ws`)
-via `matter_server.client.MatterClient`. The server owns the Matter fabric, the Thread/BLE
-radios, and commissioning; the hub discovers, commissions, and controls devices through it.
+via `matter_server.client.MatterClient` (server URL overridable via the `MATTER_SERVER_URL`
+env var). The server owns the Matter fabric, the Thread/BLE radios, and commissioning; the
+hub discovers, commissions, and controls devices through it.
+
+## Files
+
+| File | Responsibility |
+|---|---|
+| `controller.py` | `AbstractController` implementation — lifecycle, commissioning, control, and the mDNS + BLE discovery/subscription paths |
+| `mapper.py` | Matter ↔ MajorDom conversions: UUIDs (via the framework helpers), node/cluster → parameter parsing, data-type/unit/scale mapping, credentials options |
+| `model.py` | Typed `integration_data` schemas (`MatterDevice`, `MatterParameter`, …) |
+| `matter_spec.py` | Static spec metadata: system clusters/attributes, units/steps/scale, and the main-parameter map |
+| `exceptions.py` | Integration-specific exceptions |
+
+## Discovery, pairing & availability
+
+- **Discovery** runs over two transports. On-network (mDNS) devices come from
+  matter-server's `discover_commissionable_nodes()`; BLE-only commissionable devices (a
+  factory-fresh device not yet on any network) are found via the Hub's shared
+  **BLE discovery service** and matched by their commissioning identity. matter-server is
+  kept for on-network discovery because it already parses the Matter TXT records into clean
+  structured data (duplicating that on the raw Zeroconf service would add a second parser
+  and, for BLE, a second scanner contending with the chip stack during commissioning).
+- **Pairing** validates the provided credentials type against the discovery's
+  `expected_credentials_options`, then commissions through matter-server (`commission_with_code`
+  for QR / BLE, `commission_on_network` for an on-network manual code).
+- **Availability** rides on `EventType.NODE_UPDATED`: `node.available` transitions emit the
+  framework's connect/lose callbacks (deduped in `_make_availability_callback`).
+
+Every parameter id is derived through the framework UUID helpers as
+`parameter_uuid(device_id, "<attribute|command|field>_<endpoint>/<cluster>/<id>")`.
 
 Two test tiers:
 

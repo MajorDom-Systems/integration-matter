@@ -7,8 +7,8 @@ from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterComm
 from chip.clusters.Types import Nullable, NullValue
 from chip.tlv import TLVReader
 from dataclasses import fields, is_dataclass
-from typing import Any, get_args, get_origin, get_type_hints
-from uuid import NAMESPACE_DNS, UUID, uuid5
+from typing import Any, Callable, get_args, get_origin, get_type_hints
+from uuid import UUID
 
 from matter_server.client.models.node import MatterNode
 
@@ -36,27 +36,39 @@ from .model import MatterParameter, MatterParameterIntegrationData, MatterParame
 
 
 class MatterMapper:
-    def matter_id_to_uuid(self, id: str) -> UUID:
-        """Deterministically converts a Matter string identifier to a UUID."""
-        return uuid5(NAMESPACE_DNS, id)
+    def __init__(
+        self,
+        device_uuid: Callable[[str], UUID],
+        parameter_uuid: Callable[[UUID, str], UUID],
+    ):
+        # The controller's framework UUID generators (see AbstractController). Every Matter id —
+        # a device from its node/product, a discovery from its commissioning identity, a parameter
+        # from its endpoint/cluster/attribute path — is derived through these, so parameters are
+        # namespaced under the device and stay identical across pairing, fetch, and live reports.
+        self._device_uuid = device_uuid
+        self._parameter_uuid = parameter_uuid
 
     # -------------------------------------------------------------------------
-    # Single source of truth for Matter id string formats, used to derive the
-    # deterministic UUIDs above. Keep every id-building call site going through
+    # Identity: Matter identifiers -> MajorDom UUIDs.
+    # Single source of truth for the id string formats — keep every call site going through
     # these instead of formatting the f-strings inline.
     # -------------------------------------------------------------------------
 
+    def discovery_uuid(self, matter_id: str) -> UUID:
+        """UUID for a discovery, keyed on its (pre-commissioning) Matter identity string."""
+        return self._device_uuid(matter_id)
+
     def device_uuid(self, node_id: int, product_name: str | None) -> UUID:
-        return self.matter_id_to_uuid(f"{node_id}_{product_name}")
+        return self._device_uuid(f"{node_id}_{product_name}")
 
     def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
-        return self.matter_id_to_uuid(f"{device_id}_attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
+        return self._parameter_uuid(device_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
 
     def command_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
-        return self.matter_id_to_uuid(f"{device_id}_command_{endpoint_id}/{cluster_id}/{command_id}")
+        return self._parameter_uuid(device_id, f"command_{endpoint_id}/{cluster_id}/{command_id}")
 
     def command_field_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_name: str) -> UUID:
-        return self.matter_id_to_uuid(f"{device_id}_field_{endpoint_id}/{cluster_id}/{command_id}/{field_name}")
+        return self._parameter_uuid(device_id, f"field_{endpoint_id}/{cluster_id}/{command_id}/{field_name}")
 
     def define_credentials_options(
         self,

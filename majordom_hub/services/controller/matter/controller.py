@@ -38,8 +38,15 @@ from .model import (
 class MatterController(AbstractController):
     _matter_client: MatterClient
     _matter_client_session: ClientSession
-    _majordom_descoveries: dict[UUID, Discovery] = dict()
-    _mapper = MatterMapper()
+    _majordom_descoveries: dict[UUID, Discovery]
+    _mapper: MatterMapper
+
+    def __init__(self, dependencies: AbstractController.Dependencies):
+        super().__init__(dependencies)
+        # Instance state (not class-level): the mapper is wired with the framework's UUID
+        # generators, and the discoveries dict must not be shared across instances.
+        self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
+        self._majordom_descoveries = dict()
 
     # Matter commissionable BLE service (spec 5.4.2.5.6) — devices in commissioning mode advertise
     # this service + its service-data payload. discover_commissionable_nodes only surfaces IP/mDNS
@@ -437,7 +444,7 @@ class MatterController(AbstractController):
             await asyncio.sleep(interval)
 
     async def _async_matter_did_discover(self, node: CommissionableNodeData):
-        discovery_id = self._mapper.matter_id_to_uuid(
+        discovery_id = self._mapper.discovery_uuid(
             node.instance_name
             or f"{node.vendor_id}_{node.product_id}_{node.addresses[0] if node.addresses else 'unknown'}"
         )
@@ -480,7 +487,7 @@ class MatterController(AbstractController):
     def _ble_discovery_id(self, discriminator: int, vendor_id: int, product_id: int) -> UUID:
         # Stable across the device's (possibly changing) BLE address and across mDNS re-discovery
         # after it joins Thread — keyed on the commissioning identity, not the transport address.
-        return self._mapper.matter_id_to_uuid(f"ble_{vendor_id:04x}_{product_id:04x}_{discriminator:03x}")
+        return self._mapper.discovery_uuid(f"ble_{vendor_id:04x}_{product_id:04x}_{discriminator:03x}")
 
     @staticmethod
     def _parse_commissionable_ble(info: BLEDiscoveryInfo) -> tuple[int, int, int] | None:

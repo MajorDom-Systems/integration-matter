@@ -29,12 +29,16 @@ async def coordinator(cloud_service_mock, credentials_repo_mock):
         await c.stop()
 
 
-# Node ids that need more than the function-level @pytest.mark.flaky(reruns=1). door-lock is
-# the longest command test (~18 sequential commands run in dependency order), so its tail
-# commands are the most likely to hit an event-delivery timeout under load, and a single
-# rerun sometimes isn't enough. Give just this node an extra retry.
+# Node ids that need more than the function-level @pytest.mark.flaky(reruns=1). door-lock
+# and window-covering are the flakiest command tests: door-lock is the longest sequence
+# (~18 commands, whose tail commands hit event-delivery timeouts), and window-covering's
+# movement commands are intermittently rejected by the device state machine
+# (InteractionModelError Failure(0x1)). A single rerun sometimes isn't enough for either, so
+# give just these two an extra retry (see also the wider per-command WS wait for them in
+# test_control_all_commands). The rest stay at reruns=1.
 _EXTRA_RERUN_NODES = {
     "test_control_all_commands[door-lock]": 2,
+    "test_control_all_commands[window-covering]": 2,
 }
 
 

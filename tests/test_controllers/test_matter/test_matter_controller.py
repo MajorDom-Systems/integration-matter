@@ -178,6 +178,12 @@ async def test_control_all_commands(mock_matter_discovery, start_all_mvd, async_
     user = await crud.create_user()
     room = await crud.create_room()
 
+    # door-lock (long command sequence, slow tail events) and window-covering (movement
+    # commands the device is slow to ack) are the two flaky command tests — give just them a
+    # wider per-command event wait; everything else stays tight at 5s. (These two also get an
+    # extra rerun, see _EXTRA_RERUN_NODES in conftest.)
+    ws_event_timeout = 10 if device_type in ("door-lock", "window-covering") else 5
+
     discoveries = await helper.wait_for_discovery(async_client, get_user_bearer(user.id))
     discovery_id = list(discoveries.keys())[0]
 
@@ -315,7 +321,7 @@ async def test_control_all_commands(mock_matter_discovery, start_all_mvd, async_
         try:
             async with async_client_ws_connect(user.id) as ws:
                 await ws.send_json(msg_data)
-                async with asyncio.timeout(5):
+                async with asyncio.timeout(ws_event_timeout):
                     while True:
                         message = await ws.receive_json()
                         if message["type"] == "majordom_did_connect_device":

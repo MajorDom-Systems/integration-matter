@@ -532,6 +532,10 @@ class MatterController(AbstractController):
         if not hasattr(cluster, "Commands"):
             return
 
+        # A value-less send (e.g. tapping the main parameter) falls back to the arguments this
+        # command was set up with as a main parameter — see integration_data.default_arguments.
+        arguments = command.value if command.value is not None else parameter.integration_data.default_arguments
+
         for _, cmd_class in inspect.getmembers(cluster.Commands, inspect.isclass):
             if not issubclass(cmd_class, ClusterCommand):
                 continue
@@ -544,8 +548,8 @@ class MatterController(AbstractController):
 
             if cluster.id == 0x00000101:  # DoorLock
                 time_requested_timeout=1000
-            if isinstance(command.value, dict):
-                data = self._mapper.parse_data_for_command(cmd_class, command.value)
+            if isinstance(arguments, dict):
+                data = self._mapper.parse_data_for_command(cmd_class, arguments)
                 await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(**data), timed_request_timeout_ms=time_requested_timeout)
             else:
                 await self._matter_client.send_device_command(node.node_id, endpoint_id, cmd_class(), timed_request_timeout_ms=time_requested_timeout)

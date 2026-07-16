@@ -428,10 +428,17 @@ class MatterController(AbstractController):
         return None, None
 
     # -------------------------------------------------------------------------
-    # Private: discovery
+    # Private: discovery (mDNS / on-network)
     # -------------------------------------------------------------------------
 
     async def _matter_discovery_loop(self, interval: int = 5):
+        # On-network (mDNS) discovery is polled from matter-server rather than routed through the
+        # Hub's shared Zeroconf service on purpose: matter-server already parses the Matter `_matterc`
+        # TXT records into clean, structured CommissionableNodeData (discriminator, vendor/product,
+        # commissioning mode, pairing hints). Re-deriving that on the raw Zeroconf service would just
+        # duplicate matter-server's parser. BLE-only devices, which mDNS can't see, ARE discovered via
+        # the Hub's shared BLE service instead (see the BLE discovery section below) — so the "our
+        # discovery + SDK for pairing" split is used exactly where it adds value.
         while True:
             try:
                 nodes: list[CommissionableNodeData] = (

@@ -24,6 +24,12 @@ class MatterParameterIntegrationData(BaseModel):
     command_id: int | None = None
     attribute_id: int | None = None
     type: MatterParameterTypeEnum  # "command" or "attribute"
+    # Args to send when this command is used as the device's one-tap main parameter and needs
+    # them (e.g. a setpoint). A command parameter's data_type is `none`, which already satisfies
+    # ParameterState.can_be_main_parameter, so no `default_value` is needed for the flag — this
+    # only carries *what to send*. NOTE: nothing in the hub reads this yet (the app reads the
+    # top-level `default_value`, not integration_data); it's dead until the app consumes it or
+    # the design collapses onto `default_value`. See the zigbee model for the same note.
     default_arguments: dict[str, Any] | None = None
 
 

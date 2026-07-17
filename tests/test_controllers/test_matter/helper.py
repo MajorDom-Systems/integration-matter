@@ -10,7 +10,7 @@ from aiohttp import ClientSession
 from matter_server.client import MatterClient
 
 from majordom_hub.config import matter_server_url
-from majordom_hub.services.controller.matter.model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameterState
+from majordom_matter.model import MatterDevice, MatterDeviceState, MatterDeviceIntegrationData, MatterParameterState
 from majordom_hub.repository.device_repository import DeviceRepository
 from majordom_hub.utils.database import create_async_session
 

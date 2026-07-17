@@ -108,7 +108,7 @@ class MatterController(AbstractController):
 
         device_nodes: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
-            for device in await device_repository.get_all(self.name, MatterDevice):
+            for device in await device_repository.get_all(as_=MatterDevice):
                 if node := self._matter_client.get_node(device.integration_data.node_id):
                     self._subscription(device.id, node)
                     device_nodes.append(device.integration_data.node_id)
@@ -288,7 +288,7 @@ class MatterController(AbstractController):
                         value=value if isinstance(value, str | int | float | bool) else None,
                     ))
 
-        await self.dependencies.output.controller_did_receive_device_events(self, events)
+        await self.dependencies.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
         try:
@@ -489,7 +489,7 @@ class MatterController(AbstractController):
                 value=self._mapper.apply_attribute_scale(cluster_id, attribute_id, new_value),
             )
             asyncio.create_task(
-                self.dependencies.output.controller_did_receive_device_events(self, [event])
+                self.dependencies.output.controller_did_receive_events(self, [event])
             )
         return callback
 

@@ -71,7 +71,6 @@ class MatterController(AbstractController):
     # AbstractController interface
     # -------------------------------------------------------------------------
 
-    name = "Matter"
 
     @property
     def discoveries(self) -> dict[UUID, Discovery]:

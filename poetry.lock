@@ -1299,19 +1299,18 @@ dev = ["Sphinx (>=5.0.2)", "doc8 (>=0.11.2)", "pytest (>=7.0.1)", "pytest-xdist 
 
 [[package]]
 name = "majordom-integration-sdk"
-version = "0.1.1"
+version = "0.1.2"
 description = "Models, protocols, and tooling for building MajorDom integrations."
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
 files = [
-    {file = "majordom_integration_sdk-0.1.1-py3-none-any.whl", hash = "sha256:4e771f79ee51347eb718c33b22ae2941f93ce7c3f376d61655ccdd69e14cf0fc"},
-    {file = "majordom_integration_sdk-0.1.1.tar.gz", hash = "sha256:7fcf05e4ecbde2cdaaab34d49ae589e3f66b85ff30f7e4ee4583559fdca29da6"},
+    {file = "majordom_integration_sdk-0.1.2-py3-none-any.whl", hash = "sha256:b177ba59a4ffa7d845ad8f582dba17849d80c9fc73518ead60bdabf55af9b3cd"},
+    {file = "majordom_integration_sdk-0.1.2.tar.gz", hash = "sha256:b9232c6506abc75450a12fc0ad489de464af5bf1a4e7a5e77d0040cfc8fa981c"},
 ]
 
 [package.dependencies]
 bleak = ">=0.22"
-parker-pydantic-discriminator = ">=0.1.4"
 pydantic = ">=2.0,<3.0"
 python-slugify = "*"
 zeroconf = ">=0.130"
@@ -1715,22 +1714,6 @@ files = [
     {file = "packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e"},
     {file = "packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661"},
 ]
-
-[[package]]
-name = "parker-pydantic-discriminator"
-version = "0.1.4"
-description = "Pydantic discriminators for polymorphic models"
-optional = false
-python-versions = ">=3.10"
-groups = ["main"]
-files = [
-    {file = "parker_pydantic_discriminator-0.1.4-py3-none-any.whl", hash = "sha256:722c737eded5942d52caba9f0ea8569cef0948636321b4ddcc6b3ea8fb9829b6"},
-    {file = "parker_pydantic_discriminator-0.1.4.tar.gz", hash = "sha256:8675d6934c5058552989ccb0904a3befa3ebbc6e692c5f3df33a953c87c4b1cc"},
-]
-
-[package.dependencies]
-packaging = "*"
-pydantic = ">=1.10,<3.0"
 
 [[package]]
 name = "parso"

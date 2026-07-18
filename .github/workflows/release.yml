@@ -5,6 +5,12 @@ name: Release
 on:
   workflow_dispatch:
 
+# This repo's default GITHUB_TOKEN is read-only; the reusable release workflow needs write
+# (bump/merge/tag) + OIDC, and a reusable workflow can't exceed the caller's grant.
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   release:
     uses: ParkerIndustries/workflows/.github/workflows/release.yml@v1
@@ -27,3 +33,23 @@ jobs:
       # If this project publishes docs, set docs-url to add "New/Updated Documentation"
       # sections (linking changed docs/**.md pages) to the release changelog:
       # docs-url: https://your-project.example.com
+
+  # PyPI publish runs HERE, in the caller — Trusted Publishing can't match a reusable workflow.
+  publish-pypi:
+    name: Publish to PyPI
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://pypi.org/p/majordom-matter
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,6 +1,6 @@
 name: MVD binaries & PAA certs artifact
 
-# Monthly canary + test-artifact publisher (plan §3.5).
+# Monthly canary + test-artifact publisher
 #
 # PURPOSE: catch upstream (Google/CSA) changes that this integration does NOT yet support. Each
 # run fetches the LATEST Matter Virtual Device release (not a pinned version) and the current

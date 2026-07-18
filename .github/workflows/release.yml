@@ -18,6 +18,9 @@ jobs:
       pypi-package-name: majordom-matter
       python-version: "3.12"
       stable-branch: master
+      # ecdsa PYSEC-2026-1325 (Minerva timing attack) is unfixed upstream and only reachable
+      # transitively via the Matter/chip stack — accept it for the release audit.
+      audit-args: "--ignore-vuln PYSEC-2026-1325"
       # dev-branch: develop
       # Override the QA matrix (defaults to the team standard):
       # python-versions: '["3.12", "3.13"]'

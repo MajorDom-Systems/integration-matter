@@ -4,6 +4,16 @@ version = "0.1.1"
 description = "Matter integration for MajorDom — bridges Matter devices into the MajorDom language."
 authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
 readme = "README.md"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+license-files = ["LICENSE"]
+keywords = ["majordom", "matter", "thread", "smart-home", "home-automation", "iot", "integration", "csa", "connectedhomeip"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Home Automation",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "majordom-integration-sdk (>=0.1,<1.0)",
@@ -11,6 +21,13 @@ dependencies = [
     "home-assistant-chip-core (>=2025.7.0)",
     "home-assistant-chip-clusters (>=2025.7.0)",
 ]
+
+[project.urls]
+Homepage = "https://majordom.io"
+Documentation = "https://docs.majordom.io/device-integration"
+Repository = "https://github.com/MajorDom-Systems/integration-matter"
+Issues = "https://github.com/MajorDom-Systems/integration-matter/issues"
+"Commercial licensing" = "https://parker-industries.org/partnership"
 
 [dependency-groups]
 dev = [
@@ -29,9 +46,6 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 requires-poetry = ">=2.0"
 packages = [{ include = "majordom_matter" }]
-
-# DEV-MODE: local path to the private SDK. Switch to the published PyPI package when going public.
-[tool.poetry.dependencies]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

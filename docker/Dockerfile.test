@@ -1,5 +1,6 @@
 # Runs the Matter integration's virtual-device suite against real MVD `chef` binaries.
-# Build context is the PARENT dir (MajorDom/) so the SDK path-dependency is available.
+# Build context is the repo root; the SDK is a published PyPI dependency
+# (majordom-integration-sdk), resolved by `poetry install` — nothing is copied from outside the repo.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -15,14 +16,10 @@ RUN sed -i 's/#enable-dbus=yes/enable-dbus=no/g;  s/use-ipv6=no/use-ipv6=yes/g; 
 
 RUN pip install poetry && poetry config virtualenvs.create false
 
-# The SDK is a sibling path dependency (`../integration-sdk` in pyproject/lock). WORKDIR is
-# /app, so put the SDK at /integration-sdk and that relative path resolves as-is — no pyproject
-# edits, so the committed poetry.lock stays valid.
-COPY integration-sdk /integration-sdk
-COPY integration-matter/pyproject.toml integration-matter/poetry.lock /app/
+COPY pyproject.toml poetry.lock /app/
 RUN poetry install --no-root
 
-COPY integration-matter/ /app/
+COPY . /app/
 RUN pip install -e . --no-deps
 
 CMD avahi-daemon --daemonize && sleep 2 && \

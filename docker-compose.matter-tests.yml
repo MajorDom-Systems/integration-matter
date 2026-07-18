@@ -19,8 +19,8 @@ services:
 
   matter-integration-tests:
     build:
-      context: ..            # parent dir, so the SDK sibling is in the build context
-      dockerfile: integration-matter/docker/Dockerfile.test
+      context: .             # repo root; the SDK is a published PyPI dependency
+      dockerfile: docker/Dockerfile.test
     privileged: true
     depends_on: [matter-server]
     environment:

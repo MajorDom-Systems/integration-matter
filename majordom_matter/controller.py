@@ -71,7 +71,6 @@ class MatterController(AbstractController):
     # AbstractController interface
     # -------------------------------------------------------------------------
 
-
     @property
     def discoveries(self) -> dict[UUID, Discovery]:
         return self._majordom_descoveries

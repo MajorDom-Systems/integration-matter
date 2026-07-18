@@ -31,7 +31,7 @@ async def _resilient_write(*args, **kwargs):
         return False
 
 
-paa.write_paa_root_cert = _resilient_write  # fetch_dcl/git call it via this module global
+paa.write_paa_root_cert = _resilient_write  # ty: ignore[invalid-assignment]  # monkeypatch, module global
 
 
 async def main() -> None:

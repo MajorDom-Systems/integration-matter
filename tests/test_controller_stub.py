@@ -9,9 +9,8 @@ in the dockerized MVD suite, test_controller.py.
 import asyncio
 import tempfile
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import UUID
 
-import pytest
 import pytest_asyncio
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
@@ -48,8 +47,13 @@ async def _commission(controller, repository) -> UUID:
     async with repository() as repo:
         await repo.save(
             MatterDeviceState(
-                id=discovery.id, name="Test", room_id=UUID(int=1), transport="IP",
-                integration="Matter", manufacturer=None, parameters=[],
+                id=discovery.id,
+                name="Test",
+                room_id=UUID(int=1),
+                transport="IP",
+                integration="Matter",
+                manufacturer=None,
+                parameters=[],
                 integration_data=MatterDeviceIntegrationData(node_id=0),
             )
         )
@@ -86,9 +90,7 @@ async def test_send_command_reaches_the_client(controller):
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id, MatterDeviceState)
 
-    command_param = next(
-        p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command
-    )
+    command_param = next(p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command)
     await ctrl.send_command(
         DeviceCommand(device_id=device_id, parameter_id=command_param.id, value=None), device, command_param
     )
@@ -142,9 +144,9 @@ async def test_identify_sends_identify_command(controller):
 
     await ctrl.identify(device)
     # The on-off-light carries the Identify cluster (3) on its application endpoint.
-    assert any(
-        isinstance(cmd, Identify.Commands.Identify) for _n, _ep, cmd in ctrl._matter_client.sent_commands
-    ), "identify should send an Identify command to the node's Identify cluster"
+    assert any(isinstance(cmd, Identify.Commands.Identify) for _n, _ep, cmd in ctrl._matter_client.sent_commands), (
+        "identify should send an Identify command to the node's Identify cluster"
+    )
 
 
 async def test_start_populates_discoveries_and_stop_clears(controller):

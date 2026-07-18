@@ -50,9 +50,10 @@ jobs:
       - name: Fetch current Matter PAA root certificates
         run: |
           set -euo pipefail
-          # cryptography is imported by matter_server's paa_certificates helper but isn't a hard
-          # dependency of the python-matter-server wheel, so install it explicitly.
-          pip install python-matter-server atomicwrites cryptography
+          # fetch_paa_certs imports matter_server.server.*, whose transitive chip-core /
+          # cryptography / atomicwrites deps live under the `server` extra (the bare wheel only
+          # pulls the client-side chip-clusters). Install the extra so the import resolves.
+          pip install "python-matter-server[server]"
           python scripts/fetch_paa_certs.py matter_data/credentials
 
       - name: Run the integration suite against latest upstream

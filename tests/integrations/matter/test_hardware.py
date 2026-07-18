@@ -1,7 +1,7 @@
 """
 Real-hardware Matter test — commissions a physical Thread bulb over BLE→Thread through the
 hub and verifies it physically via the IoT-cage photoresistor. Mirrors
-tests/test_controllers/test_zigbee/test_zigbee_controller_hardware.py, adapted for Matter's separate
+tests/integrations/zigbee/test_hardware.py, adapted for Matter's separate
 discovery/commission step, its matter-server dependency, and its Thread border-router dependency.
 
 Deselected by default (the `hardware_iot_device` marker). Runs on the self-hosted lab-pi5 runner via
@@ -41,7 +41,7 @@ from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
 from majordom_hub.providers.paths import Paths
 from tests.hardware.iot_cage.threaded import ThreadedIotRpc
-from tests.test_controllers.test_matter import helper
+from tests.integrations.matter import helper
 
 pytestmark = [pytest.mark.hardware_iot_device, pytest.mark.asyncio(loop_scope="session")]
 

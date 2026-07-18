@@ -11,7 +11,7 @@ from matter_server.common.models import CommissionableNodeData
 
 from majordom_hub.config import VIRTUAL_DISABLED_SERVICES, Settings
 from majordom_hub.coordinator import Coordinator
-from tests.test_controllers.test_matter.helper import pair_mvd, unpair_mvd
+from tests.integrations.matter.helper import pair_mvd, unpair_mvd
 
 
 @pytest_asyncio.fixture

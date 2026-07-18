@@ -8,7 +8,7 @@ from uuid import UUID
 from matter_server.client import MatterClient
 from chip.clusters.Objects import OnOff
 
-from tests.test_controllers.test_matter import helper 
+from tests.integrations.matter import helper 
 from majordom_hub.config import matter_server_url
 
 

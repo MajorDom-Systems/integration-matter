@@ -182,6 +182,8 @@ class MatterMapper:
     def parse_data_for_command(self, cmd_class: type, data: dict) -> dict:
         import enum
 
+        if not is_dataclass(cmd_class):
+            raise TypeError(f"Expected a dataclass cluster-command class, got {cmd_class!r}")
         hints = get_type_hints(cmd_class)
         result = {}
         for field in fields(cmd_class):

@@ -74,19 +74,6 @@ docstring-code-format = true
 "__init__.py" = ["F401"]
 "tests/*" = ["E402"]
 
-# Migrated from the Hub (type-checked there under mypy). ty flags chip/matter-server interface
-# frictions (cluster attribute/command types) plus a couple of None-narrowings. Scoped rather
-# than rewritten blind — the virtual-device suite can't run on this machine (the MVD `chef`
-# binaries are x86-Linux; it runs in CI, plan §3.5), so these need CI coverage to fix safely.
-# TODO: fix under CI coverage and drop this block (cf. the HomeKit cleanup).
-[[tool.ty.overrides]]
-include = ["majordom_matter/**"]
-
-[tool.ty.overrides.rules]
-invalid-argument-type = "ignore"
-invalid-assignment = "ignore"
-unresolved-attribute = "ignore"
-
 [tool.poe.tasks.install]
 shell = """
 poetry install

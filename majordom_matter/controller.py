@@ -193,6 +193,11 @@ class MatterController(AbstractController):
                 f"types this discovery advertised: {discovery.expected_credentials_options}"
             )
 
+        # Every commissioning path below needs the pairing code/QR payload; a missing value is an
+        # unexpected caller error, not something to stringify into "None" or crash on int(None).
+        if credentials.value is None:
+            raise MatterUnexpectedError("Matter commissioning requires a pairing code, but none was provided")
+
         # Compare by value (==), not identity (is): `credentials.type` can arrive through a
         # schema layer that resolved CredentialsType via a different import path, yielding a
         # distinct enum class where `is` would never match. `==` on a str-enum compares the
@@ -239,14 +244,14 @@ class MatterController(AbstractController):
                         for parameter in self._mapper.parse_attributes(
                             device_id, endpoint_id, cluster_id, cluster, endpoint, node
                         ):
-                            value = node.get_attribute_value(
-                                endpoint_id,
-                                cluster_id,
-                                parameter.integration_data.attribute_id,
-                            )
-                            value = self._mapper.apply_attribute_scale(
-                                cluster_id, parameter.integration_data.attribute_id, value
-                            )
+                            attribute_id = parameter.integration_data.attribute_id
+                            if attribute_id is None:
+                                raise MatterUnexpectedError(
+                                    f"Attribute parameter {parameter.name!r} has no attribute_id "
+                                    f"(endpoint {endpoint_id}, cluster {cluster_id})"
+                                )
+                            value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
+                            value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                             device.parameters.append(
                                 MatterParameterState(**parameter.__dict__).with_value(
                                     self._mapper.normalize_value(value)
@@ -261,8 +266,14 @@ class MatterController(AbstractController):
                     device.main_parameter = None
                 elif main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
                     main_parameter.with_default_value(self._mapper.normalize_value(default_value))
-                else:
+                elif isinstance(default_value, dict):
+                    # A command main parameter is tapped with a fixed argument set (a dict).
                     main_parameter.integration_data.default_arguments = default_value
+                else:
+                    raise MatterUnexpectedError(
+                        f"Command main parameter {main_parameter_id} expected dict default arguments, "
+                        f"got {type(default_value).__name__}: {default_value!r}"
+                    )
 
             await device_repository.save(device, discovery.id)
 
@@ -342,9 +353,14 @@ class MatterController(AbstractController):
             exception_class, message = match
             async with self.dependencies.make_device_repository() as device_repository:
                 device_state = await device_repository.state(device.id, MatterDeviceState)
-                device_state.parameters = [p for p in device_state.parameters if p.id != parameter.id]
-                device.integration_data.black_list.append(parameter.id)
-                await device_repository.save(device, device.id)
+                if device_state is not None:
+                    # state() returns None only if the device was unpaired/removed out from under us;
+                    # nothing to prune then — just surface the original command error below.
+                    device_state.parameters = [p for p in device_state.parameters if p.id != parameter.id]
+                    device.integration_data.black_list.append(parameter.id)
+                    await device_repository.save(device, device.id)
+                else:
+                    logging.warning(f"Device {device.id} is gone; skipped blacklisting parameter {parameter.id}")
 
             logging.error(f"Command '{parameter.name}' is {message} and will be removed")
             raise exception_class(f"Command '{parameter.name}' failed: {message}") from None

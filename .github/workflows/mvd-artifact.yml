@@ -1,0 +1,94 @@
+name: MVD binaries & PAA certs artifact
+
+# Monthly canary + test-artifact publisher (plan §3.5).
+#
+# PURPOSE: catch upstream (Google/CSA) changes that this integration does NOT yet support. Each
+# run fetches the LATEST Matter Virtual Device release (not a pinned version) and the current
+# Matter PAA roots, then runs the full integration suite against them. It goes RED when upstream
+# ships something unsupported — a new device type (fetch_mvd.sh hard-fails on an unmapped type) or
+# new device behaviour (the integration tests fail) — which is the signal to add support. It only
+# publishes the downloadable `mvd-artifact` release when the suite PASSES and the content changed,
+# so the artifact PR/push runs pull (see test.yml) is always known-good and deterministic.
+#
+# The MVD binaries are connectedhomeip `chef` apps compiled per device type, shipped in Google's
+# GPG-signed MVD Debian package; only an amd64 Linux build exists upstream — hence the x86-64
+# runner. scripts/fetch_mvd.sh resolves "latest", downloads, GPG-verifies and extracts them;
+# scripts/fetch_paa_certs.py fetches the PAA roots.
+
+on:
+  schedule:
+    - cron: "0 4 1 * *" # monthly
+  workflow_dispatch:
+    inputs:
+      mvd_version:
+        description: "MVD version — 'latest' to discover the newest, or pin e.g. 1.7.0"
+        default: "latest"
+
+permissions:
+  contents: write
+  actions: write   # to trigger the test workflow after a publish
+
+env:
+  # Scheduled runs pass no input -> 'latest', so the canary always tracks upstream.
+  MVD_VERSION: ${{ github.event.inputs.mvd_version || 'latest' }}
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest # amd64 — the MVD binaries are x86-64 Linux only
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch & GPG-verify the latest MVD chef binaries
+        # Resolves the newest upstream version; hard-fails here if it introduces an unmapped
+        # device type (that failure IS the "add support" signal).
+        run: MVD_VERSION="$MVD_VERSION" ./scripts/fetch_mvd.sh
+
+      - name: Fetch current Matter PAA root certificates
+        run: |
+          set -euo pipefail
+          pip install python-matter-server atomicwrites
+          python scripts/fetch_paa_certs.py matter_data/credentials
+
+      - name: Run the integration suite against latest upstream
+        # Commissions the freshly-fetched MVD devices end to end. Fails the job (before any
+        # publish) if the latest upstream behaviour is not yet supported.
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.matter-tests.yml up --build \
+            --abort-on-container-exit --exit-code-from matter-integration-tests
+
+      - name: Package a content-hashed artifact
+        id: pkg
+        run: |
+          set -euo pipefail
+          # The credentials dir doubles as the artifact's cert payload (packaged as paa/).
+          cp -r matter_data/credentials paa
+          hash="$(find tests/mvd paa -type f ! -name '.version' -print0 | sort -z \
+                    | xargs -0 sha256sum | sha256sum | cut -c1-12)"
+          name="mvd-${MVD_VERSION}-${hash}"
+          mkdir -p out && zip -qr "out/${name}.zip" tests/mvd paa
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "hash=${hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish known-good artifact if content changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="mvd-artifact"
+          # Only reached once the suite above passed. The release body records the last content
+          # hash; skip if unchanged (same binaries + same certs as the published artifact).
+          last="$(gh release view "$tag" --json body -q .body 2>/dev/null || echo "")"
+          if echo "$last" | grep -q "${{ steps.pkg.outputs.hash }}"; then
+            echo "Unchanged (${{ steps.pkg.outputs.hash }}) — nothing to publish."
+            exit 0
+          fi
+          gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$tag" "out/${{ steps.pkg.outputs.name }}.zip" \
+            --title "MVD test artifact" \
+            --notes "MVD ${MVD_VERSION} + PAA certs. content-hash: ${{ steps.pkg.outputs.hash }}"
+          gh workflow run "QA & Tests" || true

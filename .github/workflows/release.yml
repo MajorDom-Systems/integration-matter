@@ -1,0 +1,29 @@
+name: Release
+
+# Trigger manually from the develop branch (Actions → Release → Run workflow).
+# workflow_dispatch has no branch filter — you pick the ref when you run it.
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    uses: ParkerIndustries/workflows/.github/workflows/release.yml@v1
+    with:
+      pypi-package-name: majordom-matter
+      python-version: "3.12"
+      stable-branch: master
+      # dev-branch: develop
+      # Override the QA matrix (defaults to the team standard):
+      # python-versions: '["3.12", "3.13"]'
+      # For compiled/Cython extensions, build a wheel per version (default is one
+      # pure-Python wheel — leave this off unless you have compiled extensions):
+      # matrix-build: true
+      # Setup run before QA checks and before the build (system deps, build_ext, ...),
+      # and teardown after QA — same hooks as the test workflow:
+      # setup-script: |
+      #   sudo apt-get update && sudo apt-get install -y espeak-ng
+      #   poetry run python setup.py build_ext --inplace
+      # post-run-script: docker compose down
+      # If this project publishes docs, set docs-url to add "New/Updated Documentation"
+      # sections (linking changed docs/**.md pages) to the release changelog:
+      # docs-url: https://your-project.example.com

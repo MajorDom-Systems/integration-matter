@@ -1,0 +1,57 @@
+name: QA & Tests
+
+on:
+  push:
+    # Long-lived branches — keep whichever your repo uses (main or master) and develop.
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    uses: ParkerIndustries/workflows/.github/workflows/test.yml@v1
+    # Defaults to the team matrix ["3.12", "3.13"]. Uncomment to customize:
+    # with:
+    #   python-versions: '["3.12", "3.13", "3.14"]'
+    #   # Runs after `poetry install`, before checks (system deps, Cython build_ext, ...):
+    #   setup-script: |
+    #     sudo apt-get update && sudo apt-get install -y espeak-ng
+    #   # Teardown, always runs after checks:
+    #   post-run-script: docker compose down
+
+  # Real Matter integration suite: commissions Google's MVD `chef` virtual devices against a
+  # python-matter-server, driving the controller end to end. The MVD binaries (x86-64 Linux) run
+  # natively on the ubuntu runner — no emulation, so no mac override here. Binaries and PAA certs
+  # come from the published `mvd-artifact` release (see mvd-artifact.yml, plan §3.5) rather than
+  # being committed or re-fetched from Google on every run.
+  matter-integration:
+    runs-on: ubuntu-latest # amd64 — the MVD chef binaries are x86-64 Linux only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download MVD binaries & PAA certs artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! gh release download mvd-artifact --pattern '*.zip' --dir /tmp/mvd 2>/dev/null; then
+            echo "::warning::No mvd-artifact release yet — run the 'MVD binaries & PAA certs artifact' workflow. Skipping Matter integration tests."
+            echo "skip=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          unzip -q /tmp/mvd/*.zip -d /tmp/mvd/unpacked
+          # Artifact layout: tests/mvd (chef binaries) + paa (PAA root certs).
+          mkdir -p tests matter_data
+          cp -r /tmp/mvd/unpacked/tests/mvd tests/mvd
+          cp -r /tmp/mvd/unpacked/paa matter_data/credentials
+
+      - name: Run the Matter integration suite
+        if: env.skip != '1'
+        run: |
+          set -euo pipefail
+          docker compose -f docker-compose.matter-tests.yml up --build \
+            --abort-on-container-exit --exit-code-from matter-integration-tests
+

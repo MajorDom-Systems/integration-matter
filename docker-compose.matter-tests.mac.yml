@@ -1,0 +1,11 @@
+# macOS (Apple-silicon) override: the MVD binaries are Linux x86-64, so pin the test
+# container to linux/amd64 and let Docker Desktop's Rosetta run them.
+# One-time: Docker Desktop -> Settings -> General -> "Use Rosetta for x86/amd64 emulation".
+#   docker compose -f docker-compose.matter-tests.yml -f docker-compose.matter-tests.mac.yml \
+#     up --build --exit-code-from matter-integration-tests
+# matter-server runs no x86-64 binary (just mDNS/network), so it stays native arm64.
+services:
+  matter-integration-tests:
+    platform: linux/amd64
+    environment:
+      - MATTER_DISCOVERY_WARMUP_S=180

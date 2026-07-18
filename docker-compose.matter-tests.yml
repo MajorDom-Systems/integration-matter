@@ -1,0 +1,41 @@
+# Matter integration test stack: python-matter-server + a container that runs the
+# integration's virtual-device suite against real MVD `chef` binaries.
+#
+# Run:  docker compose -f docker-compose.matter-tests.yml up --build \
+#         --exit-code-from matter-integration-tests
+# On Apple Silicon add the mac override (Rosetta):  -f docker-compose.matter-tests.mac.yml
+services:
+  matter-server:
+    image: ghcr.io/matter-js/python-matter-server:stable
+    restart: unless-stopped
+    privileged: true
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv6.conf.all.forwarding=1
+    volumes:
+      - ./matter_data:/data
+    command: --storage-path /data --paa-root-cert-dir /data/credentials --primary-interface eth0
+    networks: [matter-net]
+
+  matter-integration-tests:
+    build:
+      context: ..            # parent dir, so the SDK sibling is in the build context
+      dockerfile: integration-matter/docker/Dockerfile.test
+    privileged: true
+    depends_on: [matter-server]
+    environment:
+      - MATTER_SERVER_URL=ws://matter-server:5580/ws
+      - MATTER_DISCOVERY_TIMEOUT_S=12
+      - MATTER_INTEGRATION_TESTS=1
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+    networks: [matter-net]
+
+networks:
+  matter-net:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.16.238.0/24
+        - subnet: fd00:db8:1::/64

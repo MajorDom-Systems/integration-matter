@@ -27,8 +27,10 @@ from .matter_spec import (
     EVERYDAY_CONTROL_ATTRIBUTES,
     FIELD_TYPE_TO_DATA_TYPE,
     MIN_MAX_VALUE,
+    SENSITIVE_ATTRIBUTE_NAME_PREFIXES,
     SYSTEM_ATTRIBUTES,
     SYSTEM_CLUSTERS,
+    USER_READINGS,
     AttributeKey,
 )
 from .model import MatterParameter, MatterParameterIntegrationData, MatterParameterTypeEnum
@@ -353,20 +355,31 @@ class MatterMapper:
 
             raw_value = endpoint.get_attribute_value(cluster_id, attribute_id)
 
+            # Visibility (see the parameter-visibility recipe in the docs). System clusters and
+            # security material are always hidden. Otherwise: writable attrs are configure-once
+            # `setting`s unless curated as everyday controls; read-only attrs are hidden `system`
+            # unless curated as live readings (USER_READINGS). This inverts the old
+            # "every read-only -> user" flood — uncurated read-onlys (bounds, capabilities, counts)
+            # stay hidden and double as metadata sources; the user can still surface any of them.
             visibility = ParameterVisibility.system
             role = ParameterRole.sensor
+            key = AttributeKey(cluster_id, attribute_id)
             if cluster_id not in SYSTEM_CLUSTERS:
-                sdk_cluster = ChipClusters(None).GetClusterInfoById(cluster_id)
-                sdk_attribute = sdk_cluster.get("attributes", {}).get(attribute_id, {})
-                if sdk_attribute.get("writable"):
-                    # Writable attrs are configure-once settings by default; a curated few are
-                    # everyday main-surface controls (fan mode/speed, thermostat mode).
-                    if AttributeKey(cluster_id, attribute_id) in EVERYDAY_CONTROL_ATTRIBUTES:
-                        visibility = ParameterVisibility.user
-                    else:
-                        visibility = ParameterVisibility.setting
-                    role = ParameterRole.control
-                else:
+                writable = (
+                    ChipClusters(None)
+                    .GetClusterInfoById(cluster_id)
+                    .get("attributes", {})
+                    .get(attribute_id, {})
+                    .get("writable")
+                )
+                role = ParameterRole.control if writable else ParameterRole.sensor
+                if name.startswith(SENSITIVE_ATTRIBUTE_NAME_PREFIXES):
+                    visibility = ParameterVisibility.system  # crypto keys / credentials — never user
+                elif writable:
+                    visibility = (
+                        ParameterVisibility.user if key in EVERYDAY_CONTROL_ATTRIBUTES else ParameterVisibility.setting
+                    )
+                elif key in USER_READINGS:
                     visibility = ParameterVisibility.user
 
             valid_values = None

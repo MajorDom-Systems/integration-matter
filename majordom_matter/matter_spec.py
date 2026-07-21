@@ -161,17 +161,67 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
 }
 
 
-# Writable attributes that are everyday, main-surface controls (ParameterVisibility.user)
-# rather than configure-once settings. Only writable attributes need to be listed here —
-# read-only attributes already map to `user`, and everyday controls exposed as *commands*
-# (brightness/level, on/off, cover open-close, color changes) are `user` via parse_commands.
-# So this set mostly covers clusters whose everyday control genuinely IS an attribute write.
+# --- Visibility curation (see docs/device-integration/parameter-visibility recipe) ------------
+# The mapper defaults a read-only attribute to `system` (hidden) and only promotes it to `user`
+# if it's an explicitly curated live reading (USER_READINGS). Writable attributes default to
+# `setting`, promoted to `user` only if they're an everyday control (EVERYDAY_CONTROL_ATTRIBUTES).
+# This inverts the old "every read-only -> user" flood; anything not curated stays hidden and can
+# be surfaced by the user, or added here. Bounds/capabilities/counts fall through to `system` and
+# double as metadata sources (see ATTRIBUTE_MIN_STEPS / min-max resolution).
+
+# Writable attributes that are everyday, main-surface controls (-> user) rather than
+# configure-once settings.
 EVERYDAY_CONTROL_ATTRIBUTES: set[AttributeKey] = {
     AttributeKey(0x202, 0x0),  # FanControl.FanMode (off/low/med/high/auto)
     AttributeKey(0x202, 0x2),  # FanControl.PercentSetting
     AttributeKey(0x202, 0x5),  # FanControl.SpeedSetting
     AttributeKey(0x201, 0x1C),  # Thermostat.SystemMode (off/heat/cool/auto)
+    AttributeKey(0x201, 0x11),  # Thermostat.OccupiedCoolingSetpoint (the everyday "set the temp")
+    AttributeKey(0x201, 0x12),  # Thermostat.OccupiedHeatingSetpoint
+    AttributeKey(0x056, 0x00),  # TemperatureControl.TemperatureSetpoint
 }
+
+# Read-only attributes that ARE the live, everyday reading for their cluster (-> user). Anything
+# read-only and NOT listed here stays `system` (bounds, capabilities, counts, diagnostics).
+USER_READINGS: set[AttributeKey] = {
+    AttributeKey(0x006, 0x00),  # OnOff.OnOff
+    AttributeKey(0x008, 0x00),  # LevelControl.CurrentLevel
+    AttributeKey(0x300, 0x00),  # ColorControl.CurrentHue
+    AttributeKey(0x300, 0x01),  # ColorControl.CurrentSaturation
+    AttributeKey(0x300, 0x03),  # ColorControl.CurrentX
+    AttributeKey(0x300, 0x04),  # ColorControl.CurrentY
+    AttributeKey(0x300, 0x07),  # ColorControl.ColorTemperatureMireds
+    AttributeKey(0x201, 0x00),  # Thermostat.LocalTemperature
+    AttributeKey(0x202, 0x03),  # FanControl.PercentCurrent
+    AttributeKey(0x202, 0x06),  # FanControl.SpeedCurrent (0x04 is SpeedMax, a bound -> stays system)
+    AttributeKey(0x402, 0x00),  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x405, 0x00),  # RelativeHumidityMeasurement.MeasuredValue
+    AttributeKey(0x400, 0x00),  # IlluminanceMeasurement.MeasuredValue
+    AttributeKey(0x403, 0x00),  # PressureMeasurement.MeasuredValue
+    AttributeKey(0x404, 0x00),  # FlowMeasurement.MeasuredValue
+    AttributeKey(0x406, 0x00),  # OccupancySensing.Occupancy
+    AttributeKey(0x045, 0x00),  # BooleanState.StateValue (contact/water leak)
+    AttributeKey(0x40C, 0x00),  # CarbonMonoxideConcentrationMeasurement.MeasuredValue
+    AttributeKey(0x40D, 0x00),  # CarbonDioxideConcentrationMeasurement.MeasuredValue
+    AttributeKey(0x42A, 0x00),  # Pm25ConcentrationMeasurement.MeasuredValue
+    AttributeKey(0x101, 0x00),  # DoorLock.LockState
+    AttributeKey(0x101, 0x03),  # DoorLock.DoorState
+    AttributeKey(0x102, 0x08),  # WindowCovering.CurrentPositionLiftPercentage
+    AttributeKey(0x102, 0x09),  # WindowCovering.CurrentPositionTiltPercentage
+    AttributeKey(0x02F, 0x0C),  # PowerSource.BatPercentRemaining
+    AttributeKey(0x02F, 0x0E),  # PowerSource.BatChargeLevel
+    AttributeKey(0x060, 0x04),  # OperationalState.OperationalState
+    AttributeKey(0x061, 0x04),  # RvcOperationalState.OperationalState
+    AttributeKey(0x05C, 0x00),  # SmokeCoAlarm.ExpressedState
+    AttributeKey(0x05C, 0x01),  # SmokeCoAlarm.SmokeState
+    AttributeKey(0x05C, 0x02),  # SmokeCoAlarm.COState
+    AttributeKey(0x050, 0x03),  # ModeSelect.CurrentMode
+}
+
+# Attribute-name prefixes that carry security material and must never be shown to the user
+# (-> system regardless of role). Matter DoorLock's Aliro* attributes are cryptographic keys /
+# identifiers that the current "read-only -> user" rule was leaking straight into the tap-view.
+SENSITIVE_ATTRIBUTE_NAME_PREFIXES: tuple[str, ...] = ("Aliro",)
 
 
 # Arguments to send along with a main-parameter command/attribute when the parameter itself

@@ -36,48 +36,14 @@ Google's Matter Virtual Devices in a dockerized matter-server (`tests/test_contr
 
 ## Run it standalone (without the Hub)
 
-Matter needs a running [python-matter-server](https://github.com/home-assistant-libs/python-matter-server)
-(it owns the fabric and the Thread/BLE radios) reachable over its WebSocket — set
-`MATTER_SERVER_URL` (default `ws://localhost:5580/ws`). Thread devices also need an OpenThread
-Border Router. Then:
+`majordom-matter` is a standalone library — import it into your own app, or run **just this
+integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
+It needs a running [python-matter-server](https://github.com/home-assistant-libs/python-matter-server)
+reachable over its WebSocket (`MATTER_SERVER_URL`, default `ws://localhost:5580/ws`); Thread devices
+also need an OpenThread Border Router.
 
-```python
-# run.py
-import asyncio
-
-from majordom_integration_sdk.dev import run_controller
-from majordom_matter import MatterController
-
-# Watches for Matter devices, logs discoveries/events. Ctrl-C to stop.
-asyncio.run(run_controller(MatterController, db_path="devices.db"))
-```
-
-```sh
-poetry run python run.py
-```
-
-To use the integration in **standalone mode** — discover, pair, control, or fetch a device
-programmatically — build the dependencies yourself and call the controller directly. Visit the
-[MajorDom integration docs](https://docs.majordom.io/device-integration/standalone) for more
-details, like the dependency structure and receiving discoveries/events in standalone mode by
-implementing a delegate.
-
-```python
-import asyncio
-
-from majordom_integration_sdk.dev import build_dependencies
-from majordom_integration_sdk.schemas.device import ProvidedCredentials
-from majordom_matter import MatterController
-
-async def main():
-    deps = build_dependencies(integration=MatterController.name, db_path="devices.db")
-    controller = MatterController(deps)
-    await controller.start()
-    # ... await controller.pair_device(discovery, ProvidedCredentials(...)), send_command, fetch ...
-    await controller.stop()
-
-asyncio.run(main())
-```
+See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
+CLI, watch mode, and the programmatic API.
 
 ## About this integration
 

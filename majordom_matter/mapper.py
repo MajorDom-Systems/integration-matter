@@ -27,6 +27,7 @@ from .matter_spec import (
     EVERYDAY_COMMANDS,
     EVERYDAY_CONTROL_ATTRIBUTES,
     FIELD_TYPE_TO_DATA_TYPE,
+    METADATA_SOURCES,
     MIN_MAX_VALUE,
     SENSITIVE_ATTRIBUTE_NAME_PREFIXES,
     SYSTEM_ATTRIBUTES,
@@ -166,6 +167,35 @@ class MatterMapper:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return value * scale
         return value
+
+    def resolve_runtime_bounds(
+        self, key, cluster_id: int, endpoint, name: str, default_min, default_max
+    ) -> tuple[Any, Any]:
+        """Metadata priority 1: override a parameter's min/max with the device's own limit
+        attributes' runtime VALUES (the *_min/*_max we hide as metadata). Falls back to the passed
+        defaults (spec/type) when the device doesn't report a source attribute, warning so a quirk
+        or a new device that omits an expected limit shows up in the logs."""
+        source = METADATA_SOURCES.get(key)
+        if source is None:
+            return default_min, default_max
+        min_v, max_v = default_min, default_max
+        for attr_id, is_min in ((source.min_attr, True), (source.max_attr, False)):
+            if attr_id is None:
+                continue
+            raw = endpoint.get_attribute_value(cluster_id, attr_id)
+            resolved = self.normalize_value(raw)
+            if resolved is not None:
+                if is_min:
+                    min_v = resolved
+                else:
+                    max_v = resolved
+            else:
+                logging.warning(
+                    f"Metadata source cluster {cluster_id:#x} attr {attr_id:#x} "
+                    f"({'min' if is_min else 'max'} for {name!r}) not reported — quirk or unsupported; "
+                    f"using spec/type default"
+                )
+        return min_v, max_v
 
     def get_min_max_value(self, attribute, value) -> tuple[int | None, int | None]:
         """
@@ -400,7 +430,10 @@ class MatterMapper:
                     # Keys are numeric values sent to device, values are display labels
                     valid_values = {m.value: m.name for m in t}
 
-            min_value, max_value = self.get_min_max_value(attribute, raw_value)
+            min_value, max_value = self.get_min_max_value(attribute, raw_value)  # priority 3: wire-type range
+            min_value, max_value = self.resolve_runtime_bounds(  # priority 1: device's own limit attrs
+                key, cluster_id, endpoint, name, min_value, max_value
+            )
             scale = ATTRIBUTE_SCALE.get(AttributeKey(cluster_id, attribute_id))
             if scale is not None:
                 min_value = min_value * scale if min_value is not None else None

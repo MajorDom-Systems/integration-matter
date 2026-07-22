@@ -156,6 +156,28 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
 }
 
 
+class MetadataSource(NamedTuple):
+    """Sibling attributes whose runtime VALUES provide a parameter's min/max — the device's own
+    limit attributes (the ones we hide from the UI as metadata). Priority 1 in the resolver:
+    runtime sibling value > spec table > wire-type default."""
+
+    min_attr: int | None = None
+    max_attr: int | None = None
+
+
+METADATA_SOURCES: dict[AttributeKey, MetadataSource] = {
+    AttributeKey(0x008, 0x00): MetadataSource(0x02, 0x03),  # LevelControl.CurrentLevel <- Min/MaxLevel
+    AttributeKey(0x402, 0x00): MetadataSource(0x01, 0x02),  # TemperatureMeasurement <- Min/MaxMeasuredValue
+    AttributeKey(0x405, 0x00): MetadataSource(0x01, 0x02),  # RelativeHumidity <- Min/MaxMeasuredValue
+    AttributeKey(0x400, 0x00): MetadataSource(0x01, 0x02),  # Illuminance <- Min/MaxMeasuredValue
+    AttributeKey(0x403, 0x00): MetadataSource(0x01, 0x02),  # Pressure <- Min/MaxMeasuredValue
+    AttributeKey(0x404, 0x00): MetadataSource(0x01, 0x02),  # Flow <- Min/MaxMeasuredValue
+    AttributeKey(0x201, 0x11): MetadataSource(0x05, 0x06),  # OccupiedCoolingSetpoint <- AbsMin/MaxCoolSetpointLimit
+    AttributeKey(0x201, 0x12): MetadataSource(0x03, 0x04),  # OccupiedHeatingSetpoint <- AbsMin/MaxHeatSetpointLimit
+    AttributeKey(0x300, 0x07): MetadataSource(0x400B, 0x400C),  # ColorTemperatureMireds <- physical min/max mireds
+}
+
+
 FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
     bool: ParameterDataType.bool,
     int: ParameterDataType.integer,

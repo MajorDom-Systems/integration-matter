@@ -2,17 +2,19 @@
 attributes), replicating mapper.parse_attributes, and bucket like the iOS app: user/setting/system."""
 
 import inspect
+
 import chip.clusters.Objects as M
-from chip.clusters.ClusterObjects import ClusterAttributeDescriptor
 from chip.clusters.CHIPClusters import ChipClusters
+from chip.clusters.ClusterObjects import ClusterAttributeDescriptor
+
 from majordom_matter.matter_spec import (
-    SYSTEM_CLUSTERS,
-    SYSTEM_ATTRIBUTES,
     EVERYDAY_CONTROL_ATTRIBUTES,
-    USER_READINGS,
-    SENSITIVE_ATTRIBUTE_NAME_PREFIXES,
-    AttributeKey,
     MAIN_PARAMETER_BY_CLUSTER,
+    SENSITIVE_ATTRIBUTE_NAME_PREFIXES,
+    SYSTEM_ATTRIBUTES,
+    SYSTEM_CLUSTERS,
+    USER_READINGS,
+    AttributeKey,
 )
 
 CI = ChipClusters(None)
@@ -28,7 +30,7 @@ def writable(cid, aid):
 clusters = [
     c
     for _, c in inspect.getmembers(M, inspect.isclass)
-    if hasattr(c, "id") and hasattr(c, "Attributes") and isinstance(getattr(c, "id"), int)
+    if hasattr(c, "id") and hasattr(c, "Attributes") and isinstance(c.id, int)
 ]
 clusters = sorted({c.id: c for c in clusters}.items())
 
@@ -73,14 +75,16 @@ SPOT = {
     0x2F: "PowerSource",
     0x50: "ModeSelect",
 }
-for cid, name, is_sys, has_main, b in rows:
+for cid, name, _is_sys, has_main, b in rows:
     if cid in SPOT:
+        main = " [MAIN]" if has_main else ""
         print(
-            f"--- 0x{cid:04X} {name}{' [MAIN]' if has_main else ''} — user={len(b['user'])} setting={len(b['setting'])} system={len(b['system'])} ---"
+            f"--- 0x{cid:04X} {name}{main} — "
+            f"user={len(b['user'])} setting={len(b['setting'])} system={len(b['system'])} ---"
         )
         if b["user"]:
             print(f"   user: {', '.join(b['user'][:16])}{' …' if len(b['user']) > 16 else ''}")
 # biggest user buckets (over-exposure hotspots)
 print("\n=== TOP over-exposed 'user' clusters (most read-only attrs shown to user) ===")
-for cid, name, is_sys, has_main, b in sorted(rows, key=lambda r: -len(r[4]["user"]))[:10]:
+for cid, name, _is_sys, _has_main, b in sorted(rows, key=lambda r: -len(r[4]["user"]))[:10]:
     print(f"  0x{cid:04X} {name}: user={len(b['user'])}")

@@ -24,12 +24,14 @@ from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
     ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
-    EVERYDAY_CONTROL_ATTRIBUTES,
+    EVERYDAY_COMMANDS,
     FIELD_TYPE_TO_DATA_TYPE,
+    METADATA_SOURCES,
     MIN_MAX_VALUE,
     SYSTEM_ATTRIBUTES,
     SYSTEM_CLUSTERS,
     AttributeKey,
+    classify_attribute,
 )
 from .model import MatterParameter, MatterParameterIntegrationData, MatterParameterTypeEnum
 
@@ -164,6 +166,35 @@ class MatterMapper:
             return value * scale
         return value
 
+    def resolve_runtime_bounds(
+        self, key, cluster_id: int, endpoint, name: str, default_min, default_max
+    ) -> tuple[Any, Any]:
+        """Metadata priority 1: override a parameter's min/max with the device's own limit
+        attributes' runtime VALUES (the *_min/*_max we hide as metadata). Falls back to the passed
+        defaults (spec/type) when the device doesn't report a source attribute, warning so a quirk
+        or a new device that omits an expected limit shows up in the logs."""
+        source = METADATA_SOURCES.get(key)
+        if source is None:
+            return default_min, default_max
+        min_v, max_v = default_min, default_max
+        for attr_id, is_min in ((source.min_attr, True), (source.max_attr, False)):
+            if attr_id is None:
+                continue
+            raw = endpoint.get_attribute_value(cluster_id, attr_id)
+            resolved = self.normalize_value(raw)
+            if resolved is not None:
+                if is_min:
+                    min_v = resolved
+                else:
+                    max_v = resolved
+            else:
+                logging.warning(
+                    f"Metadata source cluster {cluster_id:#x} attr {attr_id:#x} "
+                    f"({'min' if is_min else 'max'} for {name!r}) not reported — quirk or unsupported; "
+                    f"using spec/type default"
+                )
+        return min_v, max_v
+
     def get_min_max_value(self, attribute, value) -> tuple[int | None, int | None]:
         """
         Encodes the attribute value to TLV to discover its wire type,
@@ -245,7 +276,7 @@ class MatterMapper:
         self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, node: MatterNode
     ) -> list[MatterParameter]:
         params = []
-        visibility = ParameterVisibility.system if cluster_id in SYSTEM_CLUSTERS else ParameterVisibility.user
+        on_system_cluster = cluster_id in SYSTEM_CLUSTERS
 
         # Only process commands actually supported by this device
         accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
@@ -263,6 +294,15 @@ class MatterMapper:
             # Skip commands not supported by this specific device
             if accepted_command_ids and command_id not in accepted_command_ids:
                 continue
+
+            # Command visibility: system-cluster commands hidden; everyday one-tap actions ->
+            # user; every other command (schedule/credential/log management) -> setting.
+            if on_system_cluster:
+                visibility = ParameterVisibility.system
+            elif (cluster_id, command_id) in EVERYDAY_COMMANDS:
+                visibility = ParameterVisibility.user
+            else:
+                visibility = ParameterVisibility.setting
 
             # Reflect on dataclass fields to build typed argument descriptors
             args = []
@@ -353,21 +393,42 @@ class MatterMapper:
 
             raw_value = endpoint.get_attribute_value(cluster_id, attribute_id)
 
-            visibility = ParameterVisibility.system
-            role = ParameterRole.sensor
-            if cluster_id not in SYSTEM_CLUSTERS:
-                sdk_cluster = ChipClusters(None).GetClusterInfoById(cluster_id)
-                sdk_attribute = sdk_cluster.get("attributes", {}).get(attribute_id, {})
-                if sdk_attribute.get("writable"):
-                    # Writable attrs are configure-once settings by default; a curated few are
-                    # everyday main-surface controls (fan mode/speed, thermostat mode).
-                    if AttributeKey(cluster_id, attribute_id) in EVERYDAY_CONTROL_ATTRIBUTES:
-                        visibility = ParameterVisibility.user
-                    else:
-                        visibility = ParameterVisibility.setting
-                    role = ParameterRole.control
-                else:
-                    visibility = ParameterVisibility.user
+            # Visibility (see the parameter-visibility recipe in the docs). System clusters and
+            # security material are always hidden. Otherwise: writable attrs are configure-once
+            # `setting`s unless curated as everyday controls; read-only attrs are hidden `system`
+            # unless curated as live readings (USER_READINGS). This inverts the old
+            # "every read-only -> user" flood — uncurated read-onlys (bounds, capabilities, counts)
+            # stay hidden and double as metadata sources; the user can still surface any of them.
+            key = AttributeKey(cluster_id, attribute_id)
+            writable = bool(
+                ChipClusters(None)
+                .GetClusterInfoById(cluster_id)
+                .get("attributes", {})
+                .get(attribute_id, {})
+                .get("writable")
+            )
+            # Classification via the priority ladder (see the matter README): safety (system
+            # cluster / sensitive crypto) > our hand overrides > harvested HA judgment > fallback
+            # (writable -> setting, else system), which WARNS on uncurated attributes.
+            spec, source = classify_attribute(
+                cluster_id,
+                attribute_id,
+                name,
+                writable=writable,
+                in_system_cluster=cluster_id in SYSTEM_CLUSTERS,
+            )
+            visibility = spec.visibility
+            role = spec.role if spec.role is not None else (ParameterRole.control if writable else ParameterRole.sensor)
+            if source.startswith("fallback"):
+                logging.warning(
+                    "Uncurated attribute cluster %#x attr %#x (%s) -> %s (%s); add to OUR_ATTRIBUTE_UX "
+                    "or refresh the matter-HA harvest",
+                    cluster_id,
+                    attribute_id,
+                    name,
+                    visibility.value,
+                    source,
+                )
 
             valid_values = None
             attr_type = attribute.attribute_type
@@ -377,7 +438,10 @@ class MatterMapper:
                     # Keys are numeric values sent to device, values are display labels
                     valid_values = {m.value: m.name for m in t}
 
-            min_value, max_value = self.get_min_max_value(attribute, raw_value)
+            min_value, max_value = self.get_min_max_value(attribute, raw_value)  # priority 3: wire-type range
+            min_value, max_value = self.resolve_runtime_bounds(  # priority 1: device's own limit attrs
+                key, cluster_id, endpoint, name, min_value, max_value
+            )
             scale = ATTRIBUTE_SCALE.get(AttributeKey(cluster_id, attribute_id))
             if scale is not None:
                 min_value = min_value * scale if min_value is not None else None
@@ -406,7 +470,8 @@ class MatterMapper:
                     max_value=max_value,
                     valid_values=valid_values,
                     min_step=ATTRIBUTE_MIN_STEPS.get(AttributeKey(cluster_id, attribute_id)),
-                    unit=ATTRIBUTE_UNITS.get(AttributeKey(cluster_id, attribute_id), ParameterUnit.plain),
+                    # Our spec table wins; the harvested HA unit fills gaps it leaves plain.
+                    unit=ATTRIBUTE_UNITS.get(key, spec.unit or ParameterUnit.plain),
                     role=role,
                     integration_data=MatterParameterIntegrationData(
                         endpoint_id=endpoint_id,

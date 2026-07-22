@@ -14,7 +14,14 @@ from chip.tlv import (
     UINT32_MAX,
     UINT64_MAX,
 )
-from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterUnit
+from majordom_integration_sdk.schemas.parameter import (
+    ParameterDataType,
+    ParameterRole,
+    ParameterUnit,
+    ParameterVisibility,
+)
+
+from .matter_spec_ha import MATTER_HA_ATTRIBUTE_UX
 
 SYSTEM_CLUSTERS: set[int] = {
     0x3,  # Identify
@@ -97,6 +104,8 @@ ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
         0x300, 0x0
     ): ParameterUnit.arcdegree,  # ColorControl.CurrentHue (raw 0-254, degrees = value * 360 / 254)
     AttributeKey(0x300, 0x1): ParameterUnit.percentage,  # ColorControl.CurrentSaturation
+    AttributeKey(0x300, 0x7): ParameterUnit.mired,  # ColorControl.ColorTemperatureMireds
+    AttributeKey(0x404, 0x0): ParameterUnit.m3h,  # FlowMeasurement.MeasuredValue (deci-m3/h, see scale)
     AttributeKey(0x400, 0x0): ParameterUnit.lux,  # IlluminanceMeasurement.MeasuredValue
     AttributeKey(0x402, 0x0): ParameterUnit.celsius,  # TemperatureMeasurement.MeasuredValue
     AttributeKey(0x405, 0x0): ParameterUnit.percentage,  # RelativeHumidityMeasurement.MeasuredValue
@@ -115,7 +124,7 @@ ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
         0x91,
         0x1,
         # ElectricalEnergyMeasurement.CumulativeEnergyImported (struct; .energy in mWh, see ATTRIBUTE_SCALE)
-    ): ParameterUnit.joule,
+    ): ParameterUnit.kwh,
     AttributeKey(
         0x403, 0x0
     ): ParameterUnit.pascal,  # PressureMeasurement.MeasuredValue (raw deci-kPa, see ATTRIBUTE_SCALE)
@@ -128,7 +137,8 @@ ATTRIBUTE_SCALE: dict[AttributeKey, float] = {
     AttributeKey(0x90, 0x8): 0.001,  # ElectricalPowerMeasurement.ActivePower: mW -> W
     AttributeKey(0x90, 0x4): 0.001,  # ElectricalPowerMeasurement.Voltage: mV -> V
     AttributeKey(0x90, 0x5): 0.001,  # ElectricalPowerMeasurement.ActiveCurrent: mA -> A
-    AttributeKey(0x91, 0x1): 3.6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> Wh -> J (x0.001 x3600)
+    AttributeKey(0x91, 0x1): 1e-6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> kWh
+    AttributeKey(0x404, 0x0): 0.1,  # FlowMeasurement.MeasuredValue: deci-m3/h -> m3/h
     AttributeKey(0x403, 0x0): 100,  # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
 }
 
@@ -153,6 +163,28 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
 }
 
 
+class MetadataSource(NamedTuple):
+    """Sibling attributes whose runtime VALUES provide a parameter's min/max — the device's own
+    limit attributes (the ones we hide from the UI as metadata). Priority 1 in the resolver:
+    runtime sibling value > spec table > wire-type default."""
+
+    min_attr: int | None = None
+    max_attr: int | None = None
+
+
+METADATA_SOURCES: dict[AttributeKey, MetadataSource] = {
+    AttributeKey(0x008, 0x00): MetadataSource(0x02, 0x03),  # LevelControl.CurrentLevel <- Min/MaxLevel
+    AttributeKey(0x402, 0x00): MetadataSource(0x01, 0x02),  # TemperatureMeasurement <- Min/MaxMeasuredValue
+    AttributeKey(0x405, 0x00): MetadataSource(0x01, 0x02),  # RelativeHumidity <- Min/MaxMeasuredValue
+    AttributeKey(0x400, 0x00): MetadataSource(0x01, 0x02),  # Illuminance <- Min/MaxMeasuredValue
+    AttributeKey(0x403, 0x00): MetadataSource(0x01, 0x02),  # Pressure <- Min/MaxMeasuredValue
+    AttributeKey(0x404, 0x00): MetadataSource(0x01, 0x02),  # Flow <- Min/MaxMeasuredValue
+    AttributeKey(0x201, 0x11): MetadataSource(0x05, 0x06),  # OccupiedCoolingSetpoint <- AbsMin/MaxCoolSetpointLimit
+    AttributeKey(0x201, 0x12): MetadataSource(0x03, 0x04),  # OccupiedHeatingSetpoint <- AbsMin/MaxHeatSetpointLimit
+    AttributeKey(0x300, 0x07): MetadataSource(0x400B, 0x400C),  # ColorTemperatureMireds <- physical min/max mireds
+}
+
+
 FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
     bool: ParameterDataType.bool,
     int: ParameterDataType.integer,
@@ -161,16 +193,104 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
 }
 
 
-# Writable attributes that are everyday, main-surface controls (ParameterVisibility.user)
-# rather than configure-once settings. Only writable attributes need to be listed here —
-# read-only attributes already map to `user`, and everyday controls exposed as *commands*
-# (brightness/level, on/off, cover open-close, color changes) are `user` via parse_commands.
-# So this set mostly covers clusters whose everyday control genuinely IS an attribute write.
+# --- Visibility curation (see docs/device-integration/parameter-visibility recipe) ------------
+# The mapper defaults a read-only attribute to `system` (hidden) and only promotes it to `user`
+# if it's an explicitly curated live reading (USER_READINGS). Writable attributes default to
+# `setting`, promoted to `user` only if they're an everyday control (EVERYDAY_CONTROL_ATTRIBUTES).
+# This inverts the old "every read-only -> user" flood; anything not curated stays hidden and can
+# be surfaced by the user, or added here. Bounds/capabilities/counts fall through to `system` and
+# double as metadata sources (see ATTRIBUTE_MIN_STEPS / min-max resolution).
+
+# Writable attributes that are everyday, main-surface controls (-> user) rather than
+# configure-once settings.
 EVERYDAY_CONTROL_ATTRIBUTES: set[AttributeKey] = {
     AttributeKey(0x202, 0x0),  # FanControl.FanMode (off/low/med/high/auto)
     AttributeKey(0x202, 0x2),  # FanControl.PercentSetting
     AttributeKey(0x202, 0x5),  # FanControl.SpeedSetting
     AttributeKey(0x201, 0x1C),  # Thermostat.SystemMode (off/heat/cool/auto)
+    AttributeKey(0x201, 0x11),  # Thermostat.OccupiedCoolingSetpoint (the everyday "set the temp")
+    AttributeKey(0x201, 0x12),  # Thermostat.OccupiedHeatingSetpoint
+    AttributeKey(0x056, 0x00),  # TemperatureControl.TemperatureSetpoint
+}
+
+# Read-only attributes that ARE the live, everyday reading for their cluster (-> user). Anything
+# read-only and NOT listed here stays `system` (bounds, capabilities, counts, diagnostics).
+USER_READINGS: set[AttributeKey] = {
+    AttributeKey(0x006, 0x00),  # OnOff.OnOff
+    AttributeKey(0x008, 0x00),  # LevelControl.CurrentLevel
+    AttributeKey(0x300, 0x00),  # ColorControl.CurrentHue (human color model)
+    AttributeKey(0x300, 0x01),  # ColorControl.CurrentSaturation
+    AttributeKey(0x300, 0x07),  # ColorControl.ColorTemperatureMireds
+    # CurrentX/CurrentY (0x03/0x04) are the CIE machine encoding of the same colour -> system
+    # (redundant with hue/sat for the user; still available to patch to user if wanted).
+    AttributeKey(0x201, 0x00),  # Thermostat.LocalTemperature
+    AttributeKey(0x202, 0x03),  # FanControl.PercentCurrent
+    AttributeKey(0x202, 0x06),  # FanControl.SpeedCurrent (0x04 is SpeedMax, a bound -> stays system)
+    AttributeKey(0x402, 0x00),  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x405, 0x00),  # RelativeHumidityMeasurement.MeasuredValue
+    AttributeKey(0x400, 0x00),  # IlluminanceMeasurement.MeasuredValue
+    AttributeKey(0x403, 0x00),  # PressureMeasurement.MeasuredValue
+    AttributeKey(0x404, 0x00),  # FlowMeasurement.MeasuredValue
+    AttributeKey(0x406, 0x00),  # OccupancySensing.Occupancy
+    AttributeKey(0x045, 0x00),  # BooleanState.StateValue (contact/water leak)
+    AttributeKey(0x40C, 0x00),  # CarbonMonoxideConcentrationMeasurement.MeasuredValue
+    AttributeKey(0x40D, 0x00),  # CarbonDioxideConcentrationMeasurement.MeasuredValue
+    AttributeKey(0x42A, 0x00),  # Pm25ConcentrationMeasurement.MeasuredValue
+    AttributeKey(0x101, 0x00),  # DoorLock.LockState
+    AttributeKey(0x101, 0x03),  # DoorLock.DoorState
+    AttributeKey(0x102, 0x08),  # WindowCovering.CurrentPositionLiftPercentage
+    AttributeKey(0x102, 0x09),  # WindowCovering.CurrentPositionTiltPercentage
+    AttributeKey(0x02F, 0x0C),  # PowerSource.BatPercentRemaining
+    AttributeKey(0x02F, 0x0E),  # PowerSource.BatChargeLevel
+    AttributeKey(0x060, 0x04),  # OperationalState.OperationalState
+    AttributeKey(0x061, 0x04),  # RvcOperationalState.OperationalState
+    AttributeKey(0x05C, 0x00),  # SmokeCoAlarm.ExpressedState
+    AttributeKey(0x05C, 0x01),  # SmokeCoAlarm.SmokeState
+    AttributeKey(0x05C, 0x02),  # SmokeCoAlarm.COState
+    AttributeKey(0x050, 0x03),  # ModeSelect.CurrentMode
+    # Energy metering readings (the primaries; min/max/overload/phase variants stay system)
+    AttributeKey(0x090, 0x04),  # ElectricalPowerMeasurement.Voltage
+    AttributeKey(0x090, 0x05),  # ElectricalPowerMeasurement.ActiveCurrent
+    AttributeKey(0x090, 0x08),  # ElectricalPowerMeasurement.ActivePower
+    AttributeKey(0x091, 0x01),  # ElectricalEnergyMeasurement.CumulativeEnergyImported
+}
+
+# Attribute-name prefixes that carry security material and must never be shown to the user
+# (-> system regardless of role). Matter DoorLock's Aliro* attributes are cryptographic keys /
+# identifiers that the current "read-only -> user" rule was leaking straight into the tap-view.
+SENSITIVE_ATTRIBUTE_NAME_PREFIXES: tuple[str, ...] = ("Aliro",)
+
+# Commands that are everyday one-tap actions (-> user). Every other command on a non-system
+# cluster defaults to `setting` — advanced management (schedules, credentials, logs, calibration).
+EVERYDAY_COMMANDS: set[tuple[int, int]] = {
+    (0x006, 0x0),
+    (0x006, 0x1),
+    (0x006, 0x2),  # OnOff Off / On / Toggle
+    (0x008, 0x0),
+    (0x008, 0x4),  # LevelControl MoveToLevel / MoveToLevelWithOnOff
+    (0x300, 0x0),
+    (0x300, 0x3),
+    (0x300, 0x6),
+    (0x300, 0x7),
+    (0x300, 0xA),  # ColorControl hue/sat/hue+sat/color/temp
+    (0x102, 0x0),
+    (0x102, 0x1),
+    (0x102, 0x2),
+    (0x102, 0x5),  # WindowCovering up / down / stop / goToLift%
+    (0x101, 0x0),
+    (0x101, 0x1),  # DoorLock Lock / Unlock  (credential/schedule cmds stay setting)
+    (0x201, 0x0),  # Thermostat SetpointRaiseLower
+    (0x056, 0x0),  # TemperatureControl SetTemperature
+    (0x060, 0x0),
+    (0x060, 0x1),
+    (0x060, 0x2),
+    (0x060, 0x3),  # OperationalState Pause/Stop/Start/Resume
+    (0x061, 0x0),
+    (0x061, 0x3),  # RvcOperationalState Pause / Resume
+    (0x050, 0x0),  # ModeSelect ChangeToMode
+    (0x506, 0x0),
+    (0x506, 0x1),
+    (0x506, 0x2),  # MediaPlayback Play / Pause / Stop
 }
 
 
@@ -194,7 +314,8 @@ class MainParameterSpec(NamedTuple):
 
 MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000006: MainParameterSpec(0x00000002, None),  # OnOff.Toggle
-    0x00000201: MainParameterSpec(0x00000000, {"mode": 1, "amount": 5}),  # Thermostat.SetpointRaiseLower.Cool
+    # Thermostat intentionally has NO one-tap: "raise or lower?" isn't a sensible tile action —
+    # tapping a thermostat should open its screen, not nudge a setpoint blind.
     0x00000202: MainParameterSpec(0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
     0x00000056: MainParameterSpec(
         0x00000000,
@@ -230,3 +351,70 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000556: MainParameterSpec(0x00000000, None),  # Chime.PlayChimeSound
     0x00000081: MainParameterSpec(0x00000000, None),  # ValveConfigurationAndControl.Open
 }
+
+
+# --- Merged UX classification ladder (mirror of the zigbee integration; see the matter README) ---
+# Matter has no runtime quirk layer, so the ladder is: our hand overrides > harvested HA judgment >
+# fallback. Safety rules (system cluster, sensitive crypto material) are forced hidden on top.
+
+
+class UxSpec(NamedTuple):
+    visibility: ParameterVisibility
+    role: ParameterRole | None = None
+    unit: ParameterUnit | None = None
+
+
+def _our_attribute_ux() -> dict[AttributeKey, UxSpec]:
+    out: dict[AttributeKey, UxSpec] = {}
+    for key in USER_READINGS:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.sensor)
+    for key in EVERYDAY_CONTROL_ATTRIBUTES:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.control)
+    return out
+
+
+OUR_ATTRIBUTE_UX: dict[AttributeKey, UxSpec] = _our_attribute_ux()
+
+
+def _ha_uxspec(key: AttributeKey) -> UxSpec | None:
+    t = MATTER_HA_ATTRIBUTE_UX.get((key.cluster_id, key.attribute_id))
+    if t is None:
+        return None
+    return UxSpec(ParameterVisibility(t[0]), ParameterRole(t[1]), ParameterUnit(t[2]))
+
+
+# Flip once harvested coverage is validated on real devices: unmatched writable attrs then hide
+# (system) instead of defaulting to a settings toggle. See the matter README (fallback).
+_FALLBACK_HIDE_UNCURATED = False
+
+
+def classify_attribute(
+    cluster_id: int,
+    attribute_id: int,
+    name: str,
+    *,
+    writable: bool,
+    in_system_cluster: bool,
+) -> tuple[UxSpec, str]:
+    """Resolve an attribute's (visibility, role, unit) by the priority ladder, returning the spec
+    and a source tag. First match wins:
+
+      - system cluster / sensitive crypto material -> system (safety, top priority)
+      1. OUR_ATTRIBUTE_UX          — hand curation
+      2. MATTER_HA_ATTRIBUTE_UX    — harvested HA entity judgment
+      3. fallback policy           — writable -> setting, else system; WARNS (uncurated)
+    """
+    if in_system_cluster:
+        return UxSpec(ParameterVisibility.system), "system-cluster"
+    if name.startswith(SENSITIVE_ATTRIBUTE_NAME_PREFIXES):
+        return UxSpec(ParameterVisibility.system), "sensitive"
+
+    key = AttributeKey(cluster_id, attribute_id)
+    if (spec := OUR_ATTRIBUTE_UX.get(key)) is not None:
+        return spec, "ours"
+    if (spec := _ha_uxspec(key)) is not None:
+        return spec, "ha"
+
+    if not _FALLBACK_HIDE_UNCURATED and writable:
+        return UxSpec(ParameterVisibility.setting, ParameterRole.control), "fallback-writable"
+    return UxSpec(ParameterVisibility.system), "fallback-system"

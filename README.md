@@ -121,11 +121,36 @@ asyncio.run(main())
 - [x] Graceful shutdown in `stop`
 - [x] Tests pass against virtual/simulated devices (stub + dockerized MVD suite)
 
+### Parameter metadata sources & priority
+
+Every parameter's UX metadata is resolved from several sources.
+See also the [parameter-visibility recipe](https://docs.majordom.io/device-integration/parameter-visibility).
+
+**Visibility / role / unit** — resolved by `classify_attribute()` in `matter_spec.py` (first match wins):
+
+| # | Source | What it is |
+|---|--------|-----------|
+| — | system cluster / sensitive (`Aliro*` crypto) | forced **system** (safety, top priority) |
+| 1 | `OUR_ATTRIBUTE_UX` (`USER_READINGS`, `EVERYDAY_CONTROL_ATTRIBUTES`) | our hand curation |
+| 2 | `MATTER_HA_ATTRIBUTE_UX` | judgment **harvested** from Home Assistant's Matter discovery (`scripts/harvest_matter_ha.py`, AST-parsed, vendored — no `homeassistant` dep) |
+| 3 | **fallback policy** | writable → setting, else system; **logs a warning** on uncurated attrs. Flip `_FALLBACK_HIDE_UNCURATED` once coverage is validated. |
+
+Matter has no runtime quirk layer, so (unlike zigbee) there is no v2-quirk tier. The Matter Data
+Model (`chip`) already supplies names/types/bounds; the harvest adds only the `entity_category`
+(user/config/diagnostic) judgment the spec doesn't dictate.
+
+**Bounds** come from the device's own limit attributes (runtime) > spec tables > wire-type range —
+see `resolve_runtime_bounds()` / `METADATA_SOURCES`.
+
+**Drift.** `scripts/check_matter_ha_drift.py` re-runs the AST harvest against home-assistant/core and
+diffs vs the vendored artifact via the SDK's `diff_specs`, tiering ADD / REMOVE / **RECLASSIFY**.
+
 ### Notes
 
 The MVD `chef` binaries are x86-64 Linux only, so the real-device suite runs in an amd64 container
 (Rosetta on Apple Silicon). A monthly canary fetches the *latest* upstream MVD release and fails if
-it ships something unsupported — the signal to add support.
+it ships something unsupported — the signal to add support. The same drift machinery (the SDK's
+`diff_specs`) now also watches the harvested HA-Matter judgment.
 
 ## License
 

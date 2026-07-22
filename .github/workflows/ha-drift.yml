@@ -1,0 +1,65 @@
+name: matter-HA harvest drift
+
+# Weekly drift canary + auto-refresh PR — the sibling of zigbee's zha-drift and the same machine
+# as the MVD canary (mvd-artifact.yml): sample the LATEST upstream, diff against what we vendored,
+# tier the changes by risk. Deliberately UNPINNED (`--ref dev`): the vendored
+# `matter_spec_ha.py` is the pin; this job exists to see what upstream changed.
+#
+# `majordom_matter/matter_spec_ha.py` is judgment AST-harvested from home-assistant/core's matter
+# platform files (entity_category → visibility etc.) — no homeassistant install; attribute ids
+# resolve via the chip bindings we already depend on. Exit codes from check_matter_ha_drift.py:
+#   0  no drift        -> green
+#   1  ADD/REMOVE only -> refresh the artifact and open a routine PR
+#   2  RECLASSIFY      -> HIGH RISK (changes what current users already see) — flagged for review
+
+on:
+  schedule:
+    - cron: "0 5 * * 1" # weekly, Monday
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package (chip bindings come with it)
+        run: |
+          set -euo pipefail
+          pip install poetry
+          poetry install
+
+      - name: Check drift against the vendored artifact
+        id: drift
+        run: |
+          set -euo pipefail
+          set +e
+          poetry run python scripts/check_matter_ha_drift.py --ref dev 2> drift.txt
+          code=$?
+          set -e
+          cat drift.txt
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          if [ "$code" -gt 2 ]; then exit "$code"; fi  # real failure, not a drift signal
+
+      - name: Refresh the vendored artifact
+        if: steps.drift.outputs.code != '0'
+        run: poetry run python scripts/harvest_matter_ha.py --ref dev --out majordom_matter/matter_spec_ha.py
+
+      - name: Open the refresh PR
+        if: steps.drift.outputs.code != '0'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/ha-harvest-refresh
+          commit-message: "chore(matter): refresh the vendored HA-matter harvest"
+          title: "${{ steps.drift.outputs.code == '2' && '⚠️ HIGH RISK: ' || '' }}Refresh vendored HA-matter harvest"
+          body-path: drift.txt
+          labels: ${{ steps.drift.outputs.code == '2' && 'drift,high-risk' || 'drift' }}
+          delete-branch: true

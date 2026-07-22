@@ -50,3 +50,39 @@ def test_curation_sets_are_consistent():
     # every metadata source key is a curated user reading/control (we only resolve bounds for shown params)
     shown = USER_READINGS | EVERYDAY_CONTROL_ATTRIBUTES
     assert set(METADATA_SOURCES).issubset(shown)
+
+
+# --- classification ladder probes (see classify_attribute) --------------------------------------
+
+def test_ladder_system_cluster_and_sensitive_forced_hidden():
+    from majordom_integration_sdk.schemas.parameter import ParameterVisibility
+
+    from majordom_matter.matter_spec import classify_attribute
+
+    spec, source = classify_attribute(0x0028, 0x0000, "VendorName", writable=False, in_system_cluster=True)
+    assert source == "system-cluster" and spec.visibility is ParameterVisibility.system
+    spec, source = classify_attribute(
+        0x0006, 0x0000, "AliroReaderVerificationKey", writable=True, in_system_cluster=False
+    )
+    assert source == "sensitive" and spec.visibility is ParameterVisibility.system
+
+
+def test_ladder_our_override_beats_ha():
+    from majordom_matter.matter_spec import OUR_ATTRIBUTE_UX, classify_attribute
+
+    key = next(iter(OUR_ATTRIBUTE_UX))
+    spec, source = classify_attribute(key.cluster_id, key.attribute_id, "x", writable=False, in_system_cluster=False)
+    assert source == "ours"
+
+
+def test_ladder_harvested_ha_and_fallback():
+    from majordom_matter.matter_spec import MATTER_HA_ATTRIBUTE_UX, OUR_ATTRIBUTE_UX, classify_attribute
+
+    assert len(MATTER_HA_ATTRIBUTE_UX) > 50  # the vendored HA harvest loaded
+    our_keys = {(x.cluster_id, x.attribute_id) for x in OUR_ATTRIBUTE_UX}
+    ha_only = next(k for k in MATTER_HA_ATTRIBUTE_UX if k not in our_keys)
+    _, source = classify_attribute(ha_only[0], ha_only[1], "x", writable=True, in_system_cluster=False)
+    assert source == "ha"
+    # a wholly-uncurated attribute falls to the warning fallback
+    _, source = classify_attribute(0x0ABC, 0x0001, "mystery", writable=True, in_system_cluster=False)
+    assert source.startswith("fallback")

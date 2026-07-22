@@ -25,15 +25,13 @@ from .matter_spec import (
     ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
     EVERYDAY_COMMANDS,
-    EVERYDAY_CONTROL_ATTRIBUTES,
     FIELD_TYPE_TO_DATA_TYPE,
     METADATA_SOURCES,
     MIN_MAX_VALUE,
-    SENSITIVE_ATTRIBUTE_NAME_PREFIXES,
     SYSTEM_ATTRIBUTES,
     SYSTEM_CLUSTERS,
-    USER_READINGS,
     AttributeKey,
+    classify_attribute,
 )
 from .model import MatterParameter, MatterParameterIntegrationData, MatterParameterTypeEnum
 
@@ -401,26 +399,36 @@ class MatterMapper:
             # unless curated as live readings (USER_READINGS). This inverts the old
             # "every read-only -> user" flood — uncurated read-onlys (bounds, capabilities, counts)
             # stay hidden and double as metadata sources; the user can still surface any of them.
-            visibility = ParameterVisibility.system
-            role = ParameterRole.sensor
             key = AttributeKey(cluster_id, attribute_id)
-            if cluster_id not in SYSTEM_CLUSTERS:
-                writable = (
-                    ChipClusters(None)
-                    .GetClusterInfoById(cluster_id)
-                    .get("attributes", {})
-                    .get(attribute_id, {})
-                    .get("writable")
+            writable = bool(
+                ChipClusters(None)
+                .GetClusterInfoById(cluster_id)
+                .get("attributes", {})
+                .get(attribute_id, {})
+                .get("writable")
+            )
+            # Classification via the priority ladder (see the matter README): safety (system
+            # cluster / sensitive crypto) > our hand overrides > harvested HA judgment > fallback
+            # (writable -> setting, else system), which WARNS on uncurated attributes.
+            spec, source = classify_attribute(
+                cluster_id,
+                attribute_id,
+                name,
+                writable=writable,
+                in_system_cluster=cluster_id in SYSTEM_CLUSTERS,
+            )
+            visibility = spec.visibility
+            role = spec.role if spec.role is not None else (ParameterRole.control if writable else ParameterRole.sensor)
+            if source.startswith("fallback"):
+                logging.warning(
+                    "Uncurated attribute cluster %#x attr %#x (%s) -> %s (%s); add to OUR_ATTRIBUTE_UX "
+                    "or refresh the matter-HA harvest",
+                    cluster_id,
+                    attribute_id,
+                    name,
+                    visibility.value,
+                    source,
                 )
-                role = ParameterRole.control if writable else ParameterRole.sensor
-                if name.startswith(SENSITIVE_ATTRIBUTE_NAME_PREFIXES):
-                    visibility = ParameterVisibility.system  # crypto keys / credentials — never user
-                elif writable:
-                    visibility = (
-                        ParameterVisibility.user if key in EVERYDAY_CONTROL_ATTRIBUTES else ParameterVisibility.setting
-                    )
-                elif key in USER_READINGS:
-                    visibility = ParameterVisibility.user
 
             valid_values = None
             attr_type = attribute.attribute_type
@@ -462,7 +470,8 @@ class MatterMapper:
                     max_value=max_value,
                     valid_values=valid_values,
                     min_step=ATTRIBUTE_MIN_STEPS.get(AttributeKey(cluster_id, attribute_id)),
-                    unit=ATTRIBUTE_UNITS.get(AttributeKey(cluster_id, attribute_id), ParameterUnit.plain),
+                    # Our spec table wins; the harvested HA unit fills gaps it leaves plain.
+                    unit=ATTRIBUTE_UNITS.get(key, spec.unit or ParameterUnit.plain),
                     role=role,
                     integration_data=MatterParameterIntegrationData(
                         endpoint_id=endpoint_id,

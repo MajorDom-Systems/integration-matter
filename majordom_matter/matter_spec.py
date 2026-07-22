@@ -14,7 +14,14 @@ from chip.tlv import (
     UINT32_MAX,
     UINT64_MAX,
 )
-from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterUnit
+from majordom_integration_sdk.schemas.parameter import (
+    ParameterDataType,
+    ParameterRole,
+    ParameterUnit,
+    ParameterVisibility,
+)
+
+from .matter_spec_ha import MATTER_HA_ATTRIBUTE_UX
 
 SYSTEM_CLUSTERS: set[int] = {
     0x3,  # Identify
@@ -344,3 +351,70 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000556: MainParameterSpec(0x00000000, None),  # Chime.PlayChimeSound
     0x00000081: MainParameterSpec(0x00000000, None),  # ValveConfigurationAndControl.Open
 }
+
+
+# --- Merged UX classification ladder (mirror of the zigbee integration; see the matter README) ---
+# Matter has no runtime quirk layer, so the ladder is: our hand overrides > harvested HA judgment >
+# fallback. Safety rules (system cluster, sensitive crypto material) are forced hidden on top.
+
+
+class UxSpec(NamedTuple):
+    visibility: ParameterVisibility
+    role: ParameterRole | None = None
+    unit: ParameterUnit | None = None
+
+
+def _our_attribute_ux() -> dict[AttributeKey, UxSpec]:
+    out: dict[AttributeKey, UxSpec] = {}
+    for key in USER_READINGS:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.sensor)
+    for key in EVERYDAY_CONTROL_ATTRIBUTES:
+        out[key] = UxSpec(ParameterVisibility.user, ParameterRole.control)
+    return out
+
+
+OUR_ATTRIBUTE_UX: dict[AttributeKey, UxSpec] = _our_attribute_ux()
+
+
+def _ha_uxspec(key: AttributeKey) -> UxSpec | None:
+    t = MATTER_HA_ATTRIBUTE_UX.get((key.cluster_id, key.attribute_id))
+    if t is None:
+        return None
+    return UxSpec(ParameterVisibility(t[0]), ParameterRole(t[1]), ParameterUnit(t[2]))
+
+
+# Flip once harvested coverage is validated on real devices: unmatched writable attrs then hide
+# (system) instead of defaulting to a settings toggle. See the matter README (fallback).
+_FALLBACK_HIDE_UNCURATED = False
+
+
+def classify_attribute(
+    cluster_id: int,
+    attribute_id: int,
+    name: str,
+    *,
+    writable: bool,
+    in_system_cluster: bool,
+) -> tuple[UxSpec, str]:
+    """Resolve an attribute's (visibility, role, unit) by the priority ladder, returning the spec
+    and a source tag. First match wins:
+
+      - system cluster / sensitive crypto material -> system (safety, top priority)
+      1. OUR_ATTRIBUTE_UX          — hand curation
+      2. MATTER_HA_ATTRIBUTE_UX    — harvested HA entity judgment
+      3. fallback policy           — writable -> setting, else system; WARNS (uncurated)
+    """
+    if in_system_cluster:
+        return UxSpec(ParameterVisibility.system), "system-cluster"
+    if name.startswith(SENSITIVE_ATTRIBUTE_NAME_PREFIXES):
+        return UxSpec(ParameterVisibility.system), "sensitive"
+
+    key = AttributeKey(cluster_id, attribute_id)
+    if (spec := OUR_ATTRIBUTE_UX.get(key)) is not None:
+        return spec, "ours"
+    if (spec := _ha_uxspec(key)) is not None:
+        return spec, "ha"
+
+    if not _FALLBACK_HIDE_UNCURATED and writable:
+        return UxSpec(ParameterVisibility.setting, ParameterRole.control), "fallback-writable"
+    return UxSpec(ParameterVisibility.system), "fallback-system"

@@ -2,6 +2,7 @@
 attributes), replicating mapper.parse_attributes, and bucket like the iOS app: user/setting/system."""
 
 import inspect
+from typing import cast
 
 import chip.clusters.Objects as M
 from chip.clusters.CHIPClusters import ChipClusters
@@ -37,6 +38,7 @@ clusters = sorted({c.id: c for c in clusters}.items())
 tot = {"user": 0, "setting": 0, "system": 0}
 rows = []
 for cid, cls in clusters:
+    cid = cast("int", cid)  # guaranteed by the isinstance guard above; inspect types it object
     is_sys = cid in SYSTEM_CLUSTERS
     b = {"user": [], "setting": [], "system": []}
     for name, attr in inspect.getmembers(cls.Attributes, inspect.isclass):

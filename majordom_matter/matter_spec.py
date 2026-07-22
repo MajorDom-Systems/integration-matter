@@ -193,7 +193,7 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
 }
 
 
-# --- Visibility curation (see docs/device-integration/parameter-visibility recipe) ------------
+# --- Visibility curation (see docs/device-integration/parameter-ux recipe) ------------
 # The mapper defaults a read-only attribute to `system` (hidden) and only promotes it to `user`
 # if it's an explicitly curated live reading (USER_READINGS). Writable attributes default to
 # `setting`, promoted to `user` only if they're an everyday control (EVERYDAY_CONTROL_ATTRIBUTES).

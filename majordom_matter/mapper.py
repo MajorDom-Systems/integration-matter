@@ -393,7 +393,7 @@ class MatterMapper:
 
             raw_value = endpoint.get_attribute_value(cluster_id, attribute_id)
 
-            # Visibility (see the parameter-visibility recipe in the docs). System clusters and
+            # Visibility (see the parameter-ux recipe in the docs). System clusters and
             # security material are always hidden. Otherwise: writable attrs are configure-once
             # `setting`s unless curated as everyday controls; read-only attrs are hidden `system`
             # unless curated as live readings (USER_READINGS). This inverts the old

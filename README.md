@@ -90,7 +90,7 @@ CLI, watch mode, and the programmatic API.
 ### Parameter metadata sources & priority
 
 Every parameter's UX metadata is resolved from several sources.
-See also the [parameter-visibility recipe](https://docs.majordom.io/device-integration/parameter-visibility).
+See also the [parameter-ux recipe](https://docs.majordom.io/device-integration/parameter-ux).
 
 **Visibility / role / unit** — resolved by `classify_attribute()` in `matter_spec.py` (first match wins):
 

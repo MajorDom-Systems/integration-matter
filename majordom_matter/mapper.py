@@ -24,6 +24,7 @@ from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
     ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
+    EVERYDAY_COMMANDS,
     EVERYDAY_CONTROL_ATTRIBUTES,
     FIELD_TYPE_TO_DATA_TYPE,
     MIN_MAX_VALUE,
@@ -247,7 +248,7 @@ class MatterMapper:
         self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, node: MatterNode
     ) -> list[MatterParameter]:
         params = []
-        visibility = ParameterVisibility.system if cluster_id in SYSTEM_CLUSTERS else ParameterVisibility.user
+        on_system_cluster = cluster_id in SYSTEM_CLUSTERS
 
         # Only process commands actually supported by this device
         accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
@@ -265,6 +266,15 @@ class MatterMapper:
             # Skip commands not supported by this specific device
             if accepted_command_ids and command_id not in accepted_command_ids:
                 continue
+
+            # Command visibility: system-cluster commands hidden; everyday one-tap actions ->
+            # user; every other command (schedule/credential/log management) -> setting.
+            if on_system_cluster:
+                visibility = ParameterVisibility.system
+            elif (cluster_id, command_id) in EVERYDAY_COMMANDS:
+                visibility = ParameterVisibility.user
+            else:
+                visibility = ParameterVisibility.setting
 
             # Reflect on dataclass fields to build typed argument descriptors
             args = []

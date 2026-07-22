@@ -97,6 +97,8 @@ ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
         0x300, 0x0
     ): ParameterUnit.arcdegree,  # ColorControl.CurrentHue (raw 0-254, degrees = value * 360 / 254)
     AttributeKey(0x300, 0x1): ParameterUnit.percentage,  # ColorControl.CurrentSaturation
+    AttributeKey(0x300, 0x7): ParameterUnit.mired,  # ColorControl.ColorTemperatureMireds
+    AttributeKey(0x404, 0x0): ParameterUnit.m3h,  # FlowMeasurement.MeasuredValue (deci-m3/h, see scale)
     AttributeKey(0x400, 0x0): ParameterUnit.lux,  # IlluminanceMeasurement.MeasuredValue
     AttributeKey(0x402, 0x0): ParameterUnit.celsius,  # TemperatureMeasurement.MeasuredValue
     AttributeKey(0x405, 0x0): ParameterUnit.percentage,  # RelativeHumidityMeasurement.MeasuredValue
@@ -115,7 +117,7 @@ ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
         0x91,
         0x1,
         # ElectricalEnergyMeasurement.CumulativeEnergyImported (struct; .energy in mWh, see ATTRIBUTE_SCALE)
-    ): ParameterUnit.joule,
+    ): ParameterUnit.kwh,
     AttributeKey(
         0x403, 0x0
     ): ParameterUnit.pascal,  # PressureMeasurement.MeasuredValue (raw deci-kPa, see ATTRIBUTE_SCALE)
@@ -128,7 +130,8 @@ ATTRIBUTE_SCALE: dict[AttributeKey, float] = {
     AttributeKey(0x90, 0x8): 0.001,  # ElectricalPowerMeasurement.ActivePower: mW -> W
     AttributeKey(0x90, 0x4): 0.001,  # ElectricalPowerMeasurement.Voltage: mV -> V
     AttributeKey(0x90, 0x5): 0.001,  # ElectricalPowerMeasurement.ActiveCurrent: mA -> A
-    AttributeKey(0x91, 0x1): 3.6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> Wh -> J (x0.001 x3600)
+    AttributeKey(0x91, 0x1): 1e-6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> kWh
+    AttributeKey(0x404, 0x0): 0.1,  # FlowMeasurement.MeasuredValue: deci-m3/h -> m3/h
     AttributeKey(0x403, 0x0): 100,  # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
 }
 
@@ -186,11 +189,11 @@ EVERYDAY_CONTROL_ATTRIBUTES: set[AttributeKey] = {
 USER_READINGS: set[AttributeKey] = {
     AttributeKey(0x006, 0x00),  # OnOff.OnOff
     AttributeKey(0x008, 0x00),  # LevelControl.CurrentLevel
-    AttributeKey(0x300, 0x00),  # ColorControl.CurrentHue
+    AttributeKey(0x300, 0x00),  # ColorControl.CurrentHue (human color model)
     AttributeKey(0x300, 0x01),  # ColorControl.CurrentSaturation
-    AttributeKey(0x300, 0x03),  # ColorControl.CurrentX
-    AttributeKey(0x300, 0x04),  # ColorControl.CurrentY
     AttributeKey(0x300, 0x07),  # ColorControl.ColorTemperatureMireds
+    # CurrentX/CurrentY (0x03/0x04) are the CIE machine encoding of the same colour -> system
+    # (redundant with hue/sat for the user; still available to patch to user if wanted).
     AttributeKey(0x201, 0x00),  # Thermostat.LocalTemperature
     AttributeKey(0x202, 0x03),  # FanControl.PercentCurrent
     AttributeKey(0x202, 0x06),  # FanControl.SpeedCurrent (0x04 is SpeedMax, a bound -> stays system)
@@ -216,12 +219,50 @@ USER_READINGS: set[AttributeKey] = {
     AttributeKey(0x05C, 0x01),  # SmokeCoAlarm.SmokeState
     AttributeKey(0x05C, 0x02),  # SmokeCoAlarm.COState
     AttributeKey(0x050, 0x03),  # ModeSelect.CurrentMode
+    # Energy metering readings (the primaries; min/max/overload/phase variants stay system)
+    AttributeKey(0x090, 0x04),  # ElectricalPowerMeasurement.Voltage
+    AttributeKey(0x090, 0x05),  # ElectricalPowerMeasurement.ActiveCurrent
+    AttributeKey(0x090, 0x08),  # ElectricalPowerMeasurement.ActivePower
+    AttributeKey(0x091, 0x01),  # ElectricalEnergyMeasurement.CumulativeEnergyImported
 }
 
 # Attribute-name prefixes that carry security material and must never be shown to the user
 # (-> system regardless of role). Matter DoorLock's Aliro* attributes are cryptographic keys /
 # identifiers that the current "read-only -> user" rule was leaking straight into the tap-view.
 SENSITIVE_ATTRIBUTE_NAME_PREFIXES: tuple[str, ...] = ("Aliro",)
+
+# Commands that are everyday one-tap actions (-> user). Every other command on a non-system
+# cluster defaults to `setting` — advanced management (schedules, credentials, logs, calibration).
+EVERYDAY_COMMANDS: set[tuple[int, int]] = {
+    (0x006, 0x0),
+    (0x006, 0x1),
+    (0x006, 0x2),  # OnOff Off / On / Toggle
+    (0x008, 0x0),
+    (0x008, 0x4),  # LevelControl MoveToLevel / MoveToLevelWithOnOff
+    (0x300, 0x0),
+    (0x300, 0x3),
+    (0x300, 0x6),
+    (0x300, 0x7),
+    (0x300, 0xA),  # ColorControl hue/sat/hue+sat/color/temp
+    (0x102, 0x0),
+    (0x102, 0x1),
+    (0x102, 0x2),
+    (0x102, 0x5),  # WindowCovering up / down / stop / goToLift%
+    (0x101, 0x0),
+    (0x101, 0x1),  # DoorLock Lock / Unlock  (credential/schedule cmds stay setting)
+    (0x201, 0x0),  # Thermostat SetpointRaiseLower
+    (0x056, 0x0),  # TemperatureControl SetTemperature
+    (0x060, 0x0),
+    (0x060, 0x1),
+    (0x060, 0x2),
+    (0x060, 0x3),  # OperationalState Pause/Stop/Start/Resume
+    (0x061, 0x0),
+    (0x061, 0x3),  # RvcOperationalState Pause / Resume
+    (0x050, 0x0),  # ModeSelect ChangeToMode
+    (0x506, 0x0),
+    (0x506, 0x1),
+    (0x506, 0x2),  # MediaPlayback Play / Pause / Stop
+}
 
 
 # Arguments to send along with a main-parameter command/attribute when the parameter itself
@@ -244,7 +285,8 @@ class MainParameterSpec(NamedTuple):
 
 MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000006: MainParameterSpec(0x00000002, None),  # OnOff.Toggle
-    0x00000201: MainParameterSpec(0x00000000, {"mode": 1, "amount": 5}),  # Thermostat.SetpointRaiseLower.Cool
+    # Thermostat intentionally has NO one-tap: "raise or lower?" isn't a sensible tile action —
+    # tapping a thermostat should open its screen, not nudge a setpoint blind.
     0x00000202: MainParameterSpec(0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
     0x00000056: MainParameterSpec(
         0x00000000,

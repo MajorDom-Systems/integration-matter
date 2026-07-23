@@ -30,7 +30,7 @@ jobs:
   matter-integration:
     runs-on: ubuntu-latest # amd64 — the MVD chef binaries are x86-64 Linux only
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download MVD binaries & PAA certs artifact
         env:

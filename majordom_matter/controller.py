@@ -225,6 +225,8 @@ class MatterController(AbstractController):
             device = await device_repository.state(discovery.id, MatterDeviceState)
             assert device
             device.id = device_id
+            # Manufacturer-provided, read-only description (BasicInformation product label).
+            device.description = getattr(node.device_info, "productLabel", None) or None
 
             # Persist the commissioned node id — the Hub seeds a provisional device whose
             # integration_data already exists (so it's never falsy), and later reconnects look

@@ -1,3 +1,4 @@
+import base64
 import enum
 import inspect
 import logging
@@ -106,8 +107,22 @@ class MatterMapper:
         return options or [CredentialsType.none]
 
     def normalize_value(self, value: Any):
+        """Convert a chip runtime value to a plain, JSON-serializable python value.
+
+        Parameter values are pythonic now (not byte-encoded), so anything the Hub stores/sends
+        must serialize cleanly — recurse into lists/dicts and drop chip's ``Nullable``/``NullValue``
+        sentinels (→ ``None``); chip enums are ``IntEnum`` and already serialize as their int.
+        """
         if value is NullValue or isinstance(value, Nullable):
             return None
+        if isinstance(value, (list, tuple)):
+            return [self.normalize_value(v) for v in value]
+        if isinstance(value, dict):
+            return {k: self.normalize_value(v) for k, v in value.items()}
+        if is_dataclass(value) and not isinstance(value, type):
+            return {f.name: self.normalize_value(getattr(value, f.name)) for f in fields(value)}
+        if isinstance(value, bytes | bytearray):
+            return base64.b64encode(bytes(value)).decode()
         return value
 
     def get_parameter_data_type_from_value(self, value: Any) -> ParameterDataType:

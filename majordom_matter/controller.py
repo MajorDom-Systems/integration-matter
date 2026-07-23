@@ -240,7 +240,7 @@ class MatterController(AbstractController):
                 for cluster_id, cluster in endpoint.clusters.items():
                     if hasattr(cluster, "Commands"):
                         for parameter in self._mapper.parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
-                            device.parameters.append(MatterParameterState(**parameter.__dict__, value=b""))
+                            device.parameters.append(MatterParameterState(**parameter.__dict__, value=None))
 
                     if hasattr(cluster, "Attributes"):
                         for parameter in self._mapper.parse_attributes(
@@ -255,8 +255,8 @@ class MatterController(AbstractController):
                             value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
                             value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                             device.parameters.append(
-                                MatterParameterState(**parameter.__dict__).with_value(
-                                    self._mapper.normalize_value(value)
+                                MatterParameterState(
+                                    **parameter.__dict__, value=self._mapper.normalize_value(value)
                                 )
                             )
 
@@ -267,7 +267,7 @@ class MatterController(AbstractController):
                 if main_parameter is None:
                     device.main_parameter = None
                 elif main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
-                    main_parameter.with_default_value(self._mapper.normalize_value(default_value))
+                    main_parameter.default_value = self._mapper.normalize_value(default_value)
                 elif isinstance(default_value, dict):
                     # A command main parameter is tapped with a fixed argument set (a dict).
                     main_parameter.integration_data.default_arguments = default_value
@@ -515,7 +515,9 @@ class MatterController(AbstractController):
             event = DeviceParameterChange(
                 device_id=device_id,
                 parameter_id=parameter_id,
-                value=self._mapper.apply_attribute_scale(cluster_id, attribute_id, new_value),
+                value=self._mapper.normalize_value(
+                    self._mapper.apply_attribute_scale(cluster_id, attribute_id, new_value)
+                ),
             )
             asyncio.create_task(self.dependencies.output.controller_did_receive_events(self, [event]))
 

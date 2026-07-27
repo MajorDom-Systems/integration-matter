@@ -1299,14 +1299,14 @@ dev = ["Sphinx (>=5.0.2)", "doc8 (>=0.11.2)", "pytest (>=7.0.1)", "pytest-xdist 
 
 [[package]]
 name = "majordom-integration-sdk"
-version = "0.1.5"
+version = "0.1.6"
 description = "Models, protocols, and tooling for building MajorDom integrations."
 optional = false
 python-versions = ">=3.12"
 groups = ["main"]
 files = [
-    {file = "majordom_integration_sdk-0.1.5-py3-none-any.whl", hash = "sha256:758bcf3430e75bba5e2dd54fccde81461dce892674ba2dc5189f694011d2145e"},
-    {file = "majordom_integration_sdk-0.1.5.tar.gz", hash = "sha256:7f17d8fc2dba446f855d367c762aeca338f11c4db84d0ec32bf4624e61340669"},
+    {file = "majordom_integration_sdk-0.1.6-py3-none-any.whl", hash = "sha256:a35e39c1ee2c6b254803d8967b20e0c90722514fea54fd51d72463ab9d7d5d3a"},
+    {file = "majordom_integration_sdk-0.1.6.tar.gz", hash = "sha256:cdd3bd5d30c1e004f2b2784995182838f12e5c6b0c0764a5f8e9d558024512f9"},
 ]
 
 [package.dependencies]
@@ -3601,4 +3601,4 @@ ifaddr = ">=0.1.7"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "82588cb2ef125d7ac2eabfa663da4383d66b4c0d16d769ef1d492d175f72ee88"
+content-hash = "6d3abd3b406354df251c05221456fd960091275887a65dc1d4cf15e19122a2d4"

@@ -54,6 +54,7 @@ jobs:
         run: poetry run python scripts/harvest_matter_ha.py --ref dev --out majordom_matter/matter_spec_ha.py
 
       - name: Open the refresh PR
+        id: cpr
         if: steps.drift.outputs.code != '0'
         uses: peter-evans/create-pull-request@v8
         with:
@@ -63,3 +64,18 @@ jobs:
           body-path: drift.txt
           labels: ${{ steps.drift.outputs.code == '2' && 'drift,high-risk' || 'drift' }}
           delete-branch: true
+
+      - name: Auto-merge the low-risk refresh
+        # Only exit 1 (ADD/REMOVE) auto-merges — RECLASSIFY (exit 2) is left open for human review.
+        # Waits for the PR's own checks (test.yml + coverage) and merges only if they pass; a failing
+        # check fails this step and leaves the PR open. Self-contained: no branch protection or
+        # repo "Allow auto-merge" setting required.
+        if: steps.drift.outputs.code == '1' && steps.cpr.outputs.pull-request-number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.cpr.outputs.pull-request-number }}
+        run: |
+          set -euo pipefail
+          sleep 30                                   # let the pull_request checks register
+          gh pr checks "$PR" --watch --fail-fast --interval 20
+          gh pr merge "$PR" --squash --delete-branch

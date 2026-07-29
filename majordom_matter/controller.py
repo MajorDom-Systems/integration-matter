@@ -20,7 +20,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType
 
-from majordom_matter.config import matter_server_url
+from majordom_matter.config import matter_ble_via_server, matter_server_url
 
 from .exceptions import (
     MatterConnectionError,
@@ -45,8 +45,13 @@ class MatterController(AbstractController):
 
     matter-server owns the Matter fabric, the Thread/BLE radios, and commissioning; this
     controller adapts it to the Hub's AbstractController contract, talking to it over its
-    WebSocket API. On-network devices are discovered via matter-server; BLE-only commissionable
-    devices are discovered via the Hub's shared BLE service. See readme.md.
+    WebSocket API. On-network devices are discovered via matter-server.
+
+    BLE-only commissionable devices: by default the Hub discovers them itself via the shared SDK
+    BLE scanner (needs a working Bluetooth/D-Bus stack in the Hub process). With
+    `matter_ble_via_server` set, the Hub does NO local BLE — matter-server does the BLE scan+
+    commission (via commission_with_code); the Hub only surfaces a generic "commission by code"
+    discovery. See NOTES-ble-via-matter-server.md and readme.md.
     """
 
     _matter_client: MatterClient
@@ -105,7 +110,17 @@ class MatterController(AbstractController):
         # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
         # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.
         self._ble_addresses: dict[UUID, set[str]] = {}  # discovery_id -> live BLE addresses
-        self._ble_cancel = self.dependencies.ble_discovery_service.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
+        if matter_ble_via_server:
+            # ble-via-server mode: do NOT open a local BLE scanner (the Hub process may have no
+            # usable Bluetooth/D-Bus, e.g. a de-rooted container). matter-server owns the radio and
+            # does the BLE scan+commission inside commission_with_code. Its WS API can't enumerate
+            # commissionable BLE devices, so we surface one generic "commission by code" discovery.
+            self._ble_cancel = None
+            await self._emit_ble_via_server_discovery()
+        else:
+            self._ble_cancel = self.dependencies.ble_discovery_service.register(
+                self, {self._MATTER_COMMISSIONABLE_SERVICE}
+            )
 
         device_nodes: list[int] = []
         async with self.dependencies.make_device_repository() as device_repository:
@@ -410,7 +425,48 @@ class MatterController(AbstractController):
         await self.dependencies.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
+    # Device -> Hub: BLE via matter-server (no local scan) — commission by code
+    # -------------------------------------------------------------------------
+
+    # Stable key for the single generic "commission over BLE by code" discovery used when
+    # matter_ble_via_server is set (the Hub does no local BLE scan).
+    _BLE_VIA_SERVER_DISCOVERY_KEY = "matter-ble-via-server"
+
+    async def _emit_ble_via_server_discovery(self) -> None:
+        """Surface one generic 'commission over BLE by code' discovery (ble-via-server mode).
+
+        matter-server exposes no way to ENUMERATE commissionable BLE devices, so instead of listing
+        real devices we advertise a single placeholder. Pairing it with a manual pairing code / QR
+        routes through pair_device's BLE branch to `commission_with_code`, which makes matter-server
+        scan for the device over BLE (by the code's discriminator) and commission it. On-network
+        devices are still discovered individually via the mDNS loop.
+
+        DRAFT/TODO: (1) pair_device does `device_repository.state(discovery.id)` + `assert device`,
+        which assumes the Hub seeded provisional device-state for this discovery id when the user
+        initiated pairing — verify the Hub does that for a synthetic discovery, or seed it here.
+        (2) pair_device pops the discovery on success; re-emit this placeholder afterwards so more
+        BLE devices can be added. (3) The hardware test's discover→pair flow expects a device-
+        specific discovery; under this mode it must instead pair the placeholder with the bulb's code.
+        """
+        discovery_id = self._mapper.discovery_uuid(self._BLE_VIA_SERVER_DISCOVERY_KEY)
+        discovery = Discovery(
+            id=discovery_id,
+            integration=NonEmptyStr(self.name),
+            # Accept the device's manual pairing code (or QR); commission_with_code does the BLE scan.
+            expected_credentials_options=[CredentialsType.code.with_mask("DDDD-DDD-DDDD"), CredentialsType.qr],
+            expiration=None,
+            transport=NonEmptyStr("BLE"),
+            device_name=NonEmptyStr("Matter device (enter pairing code)"),
+            device_manufacturer=None,
+            device_category=None,
+            device_icon=None,
+        )
+        self._majordom_descoveries[discovery_id] = discovery
+        await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+
+    # -------------------------------------------------------------------------
     # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP
+    # (used only when matter_ble_via_server is NOT set — i.e. the Hub scans BLE locally)
     # -------------------------------------------------------------------------
 
     async def ble_did_discover_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):

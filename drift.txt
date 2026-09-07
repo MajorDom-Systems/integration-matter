@@ -1,2 +1,2 @@
 [matter-ha] drift: +1 added  -0 removed  ~0 reclassified
-  + ADD        Chime.SelectedChime [integer]  (1366, 1): ('setting', 'control', 'plain')
+  + ADD        BooleanStateConfiguration.AlarmsEnabled [integer]  (128, 5): ('setting', 'control', 'plain')

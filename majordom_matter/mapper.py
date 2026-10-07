@@ -4,7 +4,7 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, Union, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 from chip.clusters.CHIPClusters import ChipClusters
@@ -35,6 +35,14 @@ from .matter_spec import (
     classify_attribute,
 )
 from .model import MatterParameter, MatterParameterIntegrationData, MatterParameterTypeEnum
+
+
+def _unwrap_optional(field_type: Any) -> Any:
+    """Optional[X] / Union[X, Nullable] -> X; any other generic (e.g. list[X]) stays as-is."""
+    if get_origin(field_type) is not Union:
+        return field_type
+    args = [a for a in get_args(field_type) if a not in (type(None), Nullable)]
+    return args[0] if args else field_type
 
 
 class MatterMapper:
@@ -236,12 +244,7 @@ class MatterMapper:
             if field.name not in data:
                 continue
             raw = data[field.name]
-            field_type = hints.get(field.name, field.type)
-
-            # Unwrap Optional / Union
-            if get_origin(field_type):
-                args = [a for a in get_args(field_type) if a is not type(None)]
-                field_type = args[0] if args else field_type
+            field_type = _unwrap_optional(hints.get(field.name, field.type))
 
             if raw is None:
                 result[field.name] = NullValue
@@ -258,6 +261,19 @@ class MatterMapper:
                 result[field.name] = raw
 
         return result
+
+    def arguments_by_name(
+        self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, cmd_class: type, arguments: dict
+    ) -> dict:
+        """A struct value is keyed by sub-parameter id (see parse_commands' `fields`), while
+        `default_arguments` are keyed by field name — accept both, keyed by name."""
+        if not is_dataclass(cmd_class):
+            raise TypeError(f"Expected a dataclass cluster-command class, got {cmd_class!r}")
+        names = {
+            str(self.command_field_uuid(device_id, endpoint_id, cluster_id, command_id, f.name)): f.name
+            for f in fields(cmd_class)
+        }
+        return {names.get(str(key), key): value for key, value in arguments.items()}
 
     def parse_data_for_attribute(self, attribute_cls: type, raw: Any) -> Any:
         if raw is None:
@@ -327,16 +343,15 @@ class MatterMapper:
                     if field.name.startswith("_"):
                         continue
 
-                    field_type = command_types.get(field.name, field.type)
+                    field_type = _unwrap_optional(command_types.get(field.name, field.type))
                     data_type = ParameterDataType.none
                     valid_values = None
 
-                    # Unwrap Optional[X] / Union[X, None] → take the first concrete type
-                    if get_origin(field_type):
-                        args_ = [a for a in get_args(field_type) if a is not type(None)]
-                        field_type = args_[0] if args_ else field_type
-
-                    if isinstance(field_type, type):
+                    # Nested structs and lists pass through as opaque JSON (name-keyed, as
+                    # matter-server parses them into the typed argument)
+                    if is_dataclass(field_type) or get_origin(field_type) is list:
+                        data_type = ParameterDataType.data
+                    elif isinstance(field_type, type):
                         if issubclass(field_type, enum.Enum):
                             data_type = ParameterDataType.enum
                             # Keys are numeric values sent to device, values are display labels
@@ -369,7 +384,7 @@ class MatterMapper:
                 MatterParameter(
                     id=self.command_parameter_uuid(device_id, endpoint_id, cluster_id, command_id),
                     name=name,
-                    data_type=ParameterDataType.none,
+                    data_type=ParameterDataType.struct if args else ParameterDataType.none,
                     role=ParameterRole.control,
                     visibility=visibility,
                     fields=args or None,

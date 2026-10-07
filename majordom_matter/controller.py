@@ -14,7 +14,7 @@ from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
-from majordom_integration_sdk.schemas.parameter import ParameterRole
+from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole
 from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
@@ -259,12 +259,10 @@ class MatterController(AbstractController):
                             )
 
             main_parameter_id, default_value = self._get_main_parameter(device.id, node)
-            device.main_parameter = main_parameter_id
-            if main_parameter_id and default_value is not None:
-                main_parameter = next((p for p in device.parameters if p.id == main_parameter_id), None)
-                if main_parameter is None:
-                    device.main_parameter = None
-                elif main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+            main_parameter = next((p for p in device.parameters if p.id == main_parameter_id), None)
+            device.main_parameter = main_parameter_id if main_parameter is not None else None
+            if main_parameter is not None and default_value is not None:
+                if main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
                     main_parameter.default_value = self._mapper.normalize_value(default_value)
                 elif isinstance(default_value, dict):
                     # A command main parameter is tapped with a fixed argument set (a dict).
@@ -274,6 +272,13 @@ class MatterController(AbstractController):
                         f"Command main parameter {main_parameter_id} expected dict default arguments, "
                         f"got {type(default_value).__name__}: {default_value!r}"
                     )
+            if main_parameter is not None and main_parameter.data_type is ParameterDataType.struct:
+                # A struct is a one-tap main parameter only with a default_value: the id-keyed
+                # arguments a tap sends.
+                arguments = main_parameter.integration_data.default_arguments or {}
+                main_parameter.default_value = {
+                    str(f.id): arguments[f.name] for f in main_parameter.fields or () if f.name in arguments
+                }
 
             await device_repository.save(device, discovery.id)
 
@@ -578,6 +583,9 @@ class MatterController(AbstractController):
             if cluster.id == 0x00000101:  # DoorLock
                 time_requested_timeout = 1000
             if isinstance(arguments, dict):
+                arguments = self._mapper.arguments_by_name(
+                    command.device_id, endpoint_id, cluster.id, command_id, cmd_class, arguments
+                )
                 data = self._mapper.parse_data_for_command(cmd_class, arguments)
                 await self._matter_client.send_device_command(
                     node.node_id, endpoint_id, cmd_class(**data), timed_request_timeout_ms=time_requested_timeout

@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
+from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
 from majordom_integration_sdk.testing import (
@@ -28,7 +29,9 @@ from majordom_integration_sdk.testing import (
 from matter_server.client import MatterClient
 
 from majordom_matter import MatterController
-from majordom_matter.config import matter_server_url
+
+# The matter-server the tests run against.
+matter_server_url = os.environ.get("MATTER_SERVER_URL", "ws://localhost:5580/ws")
 
 BIN_DIR = Path(__file__).parent / "mvd"
 _MVD_LIVENESS_CHECK_S = 0.3
@@ -126,6 +129,7 @@ async def matter(mvd):
         zeroconf_discovery_service=FakeZeroconfDiscoveryService(),
         ssdp_discovery_service=FakeSSDPDiscoveryService(),
         ble_discovery_service=FakeBLEDiscoveryService(),
+        links={"matter": Endpoint("matter", "ws", matter_server_url)},
     )
     controller = MatterController(deps)
     await controller.start()

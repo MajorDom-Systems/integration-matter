@@ -8,6 +8,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
+from majordom_integration_sdk import Need
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.discovery.ble_discovery import BLEDiscoveryInfo, BLEDiscoveryService
 from majordom_integration_sdk.schemas.base import NonEmptyStr
@@ -20,7 +21,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
-from majordom_matter.config import matter_server_url
+from majordom_matter.config import MATTER_SERVER
 
 from .exceptions import (
     MatterConnectionError,
@@ -56,6 +57,9 @@ class MatterController(AbstractController):
     WebSocket API. On-network devices are discovered via matter-server; BLE-only commissionable
     devices are discovered via the Hub's shared BLE service. See readme.md.
     """
+
+    needs = [Need("matter", ["ws"])]
+    services = [MATTER_SERVER]
 
     _matter_client: MatterClient
     _matter_client_session: ClientSession
@@ -101,12 +105,18 @@ class MatterController(AbstractController):
         self._background_tasks: list[asyncio.Task] = []
         self._node_availability: dict[UUID, bool] = {}
         self._matter_client_session = ClientSession()
-        self._matter_client = MatterClient(matter_server_url, self._matter_client_session)
+        self._matter_client = MatterClient(self.dependencies.links["matter"].url, self._matter_client_session)
         await self._matter_client.connect()
 
         init_ready = asyncio.Event()
         self._background_tasks.append(asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready)))
         await init_ready.wait()
+
+        # Networks new devices get commissioned onto.
+        if wifi := self.dependencies.context.wifi:
+            await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
+        if dataset := self.dependencies.context.thread_dataset:
+            await self._matter_client.set_thread_operational_dataset(dataset)
 
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 

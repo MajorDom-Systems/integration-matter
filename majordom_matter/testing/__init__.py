@@ -63,6 +63,7 @@ class FakeMatterClient:
         self.sent_commands: list[tuple[int, int, Any]] = []
         self.written_attributes: list[tuple[int, str, Any]] = []
         self.removed_nodes: list[int] = []
+        self.networks: dict[str, Any] = {}  # credentials handed over for commissioning
 
     # --- lifecycle ---
     async def connect(self) -> None:
@@ -77,6 +78,12 @@ class FakeMatterClient:
 
     async def disconnect(self) -> None:
         return None
+
+    async def set_wifi_credentials(self, ssid: str, credentials: str) -> None:
+        self.networks["wifi"] = (ssid, credentials)
+
+    async def set_thread_operational_dataset(self, dataset: str) -> None:
+        self.networks["thread"] = dataset
 
     # --- nodes ---
     def get_nodes(self) -> list[MatterNode]:

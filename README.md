@@ -53,7 +53,7 @@ Google's Matter Virtual Devices in a dockerized matter-server (`tests/test_contr
 `majordom-matter` is a standalone library — import it into your own app, or run **just this
 integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
 It needs a running [python-matter-server](https://github.com/home-assistant-libs/python-matter-server)
-reachable over its WebSocket (`MATTER_SERVER_URL`, default `ws://localhost:5580/ws`); Thread devices
+reachable over its WebSocket (pass it as `links={"matter": Endpoint("matter", "ws", "ws://localhost:5580/ws")}`); Thread devices
 also need an OpenThread Border Router.
 
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
@@ -71,8 +71,8 @@ CLI, watch mode, and the programmatic API.
 
 - **Hardware adapters:** an 802.15.4 radio (e.g. a SkyConnect / Thread dongle) for Thread devices —
   driven by matter-server / the OTBR, not this package directly.
-- **Third-party software services:** a **matter-server** instance reachable over WebSocket
-  (`MATTER_SERVER_URL`), and an **OpenThread Border Router (OTBR)** for Thread devices.
+- **Third-party software services:** a **matter-server** instance reachable over WebSocket (declared in
+  `config.py`, run by the hub), and an **OpenThread Border Router (OTBR)** for Thread devices.
 - **OS / permissions:** BLE access for commissioning; mDNS on the LAN for on-network discovery.
 
 ### Protocol stack (OSI)

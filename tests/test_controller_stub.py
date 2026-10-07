@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from majordom_integration_sdk import Context, Endpoint, WifiCredentials
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import build_test_dependencies
@@ -31,6 +32,7 @@ async def controller(monkeypatch):
     """A started MatterController whose matter-server client is the in-process fake."""
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter")
+    deps = deps.copy(links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")})
     controller = MatterController(deps)
     await controller.start()
     yield controller, deps.output
@@ -439,3 +441,15 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
     await _wait(lambda: subscribed(energy) is not None)
     parsed = ElectricalEnergyMeasurement.Structs.EnergyMeasurementStruct(energy=5_000_000)
     assert subscribed(energy) == ctrl._mapper.attribute_value(cluster_id, 0x01, parsed) == 5
+
+
+async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
+        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")},
+        context=Context(wifi=WifiCredentials("home", "secret"), thread_dataset="0e08abcd"),
+    )
+    controller = MatterController(deps)
+    await controller.start()
+    assert controller._matter_client.networks == {"wifi": ("home", "secret"), "thread": "0e08abcd"}
+    await controller.stop()

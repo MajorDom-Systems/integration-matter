@@ -1,8 +1,8 @@
 # Matter integration
 
 The hub talks to a **Matter controller server** over its WebSocket API (`ws://<host>:5580/ws`)
-via `matter_server.client.MatterClient` (server URL overridable via the `MATTER_SERVER_URL`
-env var). The server owns the Matter fabric, the Thread/BLE radios, and commissioning; the
+via `matter_server.client.MatterClient`, at the URL of its `matter` link. `config.py` declares
+that server as a service the hub runs, with Thread as an optional need. The server owns the Matter fabric, the Thread/BLE radios, and commissioning; the
 hub discovers, commissions, and controls devices through it.
 
 ## Files

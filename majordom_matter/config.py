@@ -1,6 +1,17 @@
-import os
+"""matter-server: the Matter controller service this integration drives over its WebSocket API."""
 
-# The MajorDom Matter integration talks to a python-matter-server instance over WebSocket.
-# Point it at yours via MATTER_SERVER_URL; the default matches a `matter-server` service on
-# the same Docker network.
-matter_server_url = os.environ.get("MATTER_SERVER_URL", "ws://matter-server:5580/ws")
+from majordom_integration_sdk import Endpoint, Need, Service
+
+MATTER_SERVER = Service(
+    "matter-server",
+    # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet.
+    needs=[Need("ip"), Need("ble", required=False), Need("thread", ["otbr-rest"], required=False)],
+    provides=[Endpoint("matter", "ws", "ws://127.0.0.1:5580/ws")],
+    compose={
+        "image": "ghcr.io/matter-js/matterjs-server:dev",
+        "network_mode": "host",
+        "userns_mode": "host",
+        "environment": {"STORAGE_PATH": "/data", "NOBLE_BINDINGS": "dbus", "BLUETOOTH_ADAPTER": "0"},
+        "volumes": ["{data}:/data", "/run/dbus:/run/dbus:ro"],
+    },
+)

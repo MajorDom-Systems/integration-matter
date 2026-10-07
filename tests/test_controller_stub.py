@@ -158,3 +158,65 @@ async def test_start_populates_discoveries_and_stop_clears(controller):
 
     await ctrl.stop()
     assert ctrl.discoveries == {}, "stop() should clear discoveries"
+
+
+async def _move_to_level_parameter(ctrl, device_id: UUID):
+    from chip.clusters.Objects import LevelControl
+
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+        state = await repo.state(device_id, MatterDeviceState)
+    param_id = ctrl._mapper.command_parameter_uuid(
+        device_id, 13, LevelControl.id, LevelControl.Commands.MoveToLevel.command_id
+    )
+    return device, state, next(p for p in state.parameters if p.id == param_id)
+
+
+async def test_command_with_arguments_is_a_struct(controller):
+    from majordom_integration_sdk.schemas.parameter import ParameterDataType
+
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    _device, _state, param = await _move_to_level_parameter(ctrl, device_id)
+    assert param.data_type == ParameterDataType.struct
+    assert param.fields
+
+
+async def test_struct_value_reaches_the_device_by_field_id_or_name(controller):
+    from chip.clusters.Objects import LevelControl
+    from chip.tlv import uint
+
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    device, _state, param = await _move_to_level_parameter(ctrl, device_id)
+    field_id = ctrl._mapper.command_field_uuid(device_id, 13, LevelControl.id, 0x00, "level")
+
+    for value in ({str(field_id): 7}, {"level": 7}):
+        await ctrl.send_command(DeviceCommand(device_id=device_id, parameter_id=param.id, value=value), device, param)
+        _node_id, _endpoint_id, cmd = ctrl._matter_client.sent_commands[-1]
+        assert cmd == LevelControl.Commands.MoveToLevel(level=uint(7))
+
+
+async def test_struct_command_main_parameter_taps_its_default_arguments(controller, monkeypatch):
+    from chip.clusters.Objects import LevelControl
+    from chip.tlv import uint
+
+    from majordom_matter.matter_spec import MainParameterSpec
+
+    monkeypatch.setattr(
+        "majordom_matter.controller.MAIN_PARAMETER_BY_CLUSTER",
+        {LevelControl.id: MainParameterSpec(0x00, {"level": 9})},
+    )
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    device, state, param = await _move_to_level_parameter(ctrl, device_id)
+    assert state.main_parameter == param.id and state.can_set_main_parameter(param.id)
+    field_id = ctrl._mapper.command_field_uuid(device_id, 13, LevelControl.id, 0x00, "level")
+    assert param.default_value == {str(field_id): 9}
+    assert MatterDeviceState.model_validate(state.model_dump(mode="json")).parameters_dict[param.id].default_value == (
+        {str(field_id): 9}
+    )
+
+    tap = param.main_cycle[0]
+    await ctrl.send_command(DeviceCommand(device_id=device_id, parameter_id=param.id, value=tap), device, param)
+    assert ctrl._matter_client.sent_commands[-1][2] == LevelControl.Commands.MoveToLevel(level=uint(9))

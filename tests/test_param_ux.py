@@ -54,6 +54,7 @@ def test_curation_sets_are_consistent():
 
 # --- classification ladder probes (see classify_attribute) --------------------------------------
 
+
 def test_ladder_system_cluster_and_sensitive_forced_hidden():
     from majordom_integration_sdk.schemas.parameter import ParameterVisibility
 

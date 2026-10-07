@@ -22,28 +22,56 @@ from __future__ import annotations
 
 import argparse
 import ast
+import subprocess
 import sys
 import urllib.request
 
 import chip.clusters as clusters
 
 _PLATFORM_FILES = (
-    "sensor", "binary_sensor", "switch", "number", "select",
-    "climate", "cover", "fan", "light", "lock", "button", "event",
+    "sensor",
+    "binary_sensor",
+    "switch",
+    "number",
+    "select",
+    "climate",
+    "cover",
+    "fan",
+    "light",
+    "lock",
+    "button",
+    "event",
 )
 _RAW = "https://raw.githubusercontent.com/home-assistant/core/{ref}/homeassistant/components/matter/{f}.py"
 
 # HA unit-enum leaf / device_class leaf -> our ParameterUnit value. Unmapped -> "plain".
 _UNIT_BY_LEAF = {
-    "CELSIUS": "celsius", "PERCENTAGE": "percentage", "KELVIN": "kelvin", "WATT": "watt",
-    "VOLT": "volt", "AMPERE": "ampere", "KILO_WATT_HOUR": "kwh", "HERTZ": "hertz", "LUX": "lux",
-    "PASCAL": "pascal", "KILO_PASCAL": "pascal", "HECTOPASCAL": "pascal",
-    "PARTS_PER_MILLION": "ppm", "MICROGRAMS_PER_CUBIC_METER": "ugm3",
+    "CELSIUS": "celsius",
+    "PERCENTAGE": "percentage",
+    "KELVIN": "kelvin",
+    "WATT": "watt",
+    "VOLT": "volt",
+    "AMPERE": "ampere",
+    "KILO_WATT_HOUR": "kwh",
+    "HERTZ": "hertz",
+    "LUX": "lux",
+    "PASCAL": "pascal",
+    "KILO_PASCAL": "pascal",
+    "HECTOPASCAL": "pascal",
+    "PARTS_PER_MILLION": "ppm",
+    "MICROGRAMS_PER_CUBIC_METER": "ugm3",
 }
 _UNIT_BY_DEVICE_CLASS = {
-    "TEMPERATURE": "celsius", "HUMIDITY": "percentage", "BATTERY": "percentage",
-    "ILLUMINANCE": "lux", "POWER": "watt", "VOLTAGE": "volt", "CURRENT": "ampere",
-    "ENERGY": "kwh", "PRESSURE": "pascal", "FREQUENCY": "hertz",
+    "TEMPERATURE": "celsius",
+    "HUMIDITY": "percentage",
+    "BATTERY": "percentage",
+    "ILLUMINANCE": "lux",
+    "POWER": "watt",
+    "VOLTAGE": "volt",
+    "CURRENT": "ampere",
+    "ENERGY": "kwh",
+    "PRESSURE": "pascal",
+    "FREQUENCY": "hertz",
 }
 _CONTROL_PLATFORMS = {"switch", "number", "select", "climate", "cover", "fan", "light", "lock", "button"}
 
@@ -168,6 +196,7 @@ def main() -> int:
     else:
         with open(args.out, "w") as fh:
             fh.write(text)
+        subprocess.run(["ruff", "format", "--quiet", args.out], check=True)  # as `poe check` would leave it
         print(f"[harvest_matter_ha] ref={args.ref}: wrote {len(data)} entries -> {args.out}", file=sys.stderr)
     print(f"[harvest_matter_ha] {len(skipped)} schemas skipped (composite/transform/unresolved)", file=sys.stderr)
     return 0

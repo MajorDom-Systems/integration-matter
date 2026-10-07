@@ -255,9 +255,7 @@ class MatterController(AbstractController):
                             value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
                             value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                             device.parameters.append(
-                                MatterParameterState(
-                                    **parameter.__dict__, value=self._mapper.normalize_value(value)
-                                )
+                                MatterParameterState(**parameter.__dict__, value=self._mapper.normalize_value(value))
                             )
 
             main_parameter_id, default_value = self._get_main_parameter(device.id, node)

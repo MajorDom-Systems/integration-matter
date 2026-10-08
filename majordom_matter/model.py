@@ -27,11 +27,10 @@ class MatterParameterIntegrationData(BaseModel):
     command_id: int | None = None
     attribute_id: int | None = None
     type: MatterParameterTypeEnum  # "command" or "attribute"
-    # Args to send when this command is used as the device's one-tap main parameter and needs
-    # them (e.g. a setpoint). A command parameter's data_type is `none`, which already satisfies
-    # ParameterState.can_be_main_parameter, so no `default_value` is needed for the flag — this
-    # only carries *what to send*. send_command applies it when a command arrives with no value
-    # (i.e. the user tapped the main parameter). See the zigbee model for the same note.
+    # Args (keyed by field name) to send when this command is used as the device's one-tap main
+    # parameter and needs them (e.g. a setpoint). A command with arguments is a `struct`, so it
+    # also gets them as an id-keyed `default_value` to satisfy ParameterState.can_be_main_parameter;
+    # send_command applies these when a command arrives with no value. See the zigbee model.
     default_arguments: dict[str, Any] | None = None
 
 

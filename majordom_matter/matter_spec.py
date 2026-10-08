@@ -302,6 +302,11 @@ EVERYDAY_COMMANDS: set[tuple[int, int]] = {
     (0x506, 0x0),
     (0x506, 0x1),
     (0x506, 0x2),  # MediaPlayback Play / Pause / Stop
+    (0x104, 0x0),
+    (0x104, 0x1),  # ClosureControl Stop / MoveTo
+    (0x556, 0x0),  # Chime PlayChimeSound
+    (0x081, 0x0),
+    (0x081, 0x1),  # ValveConfigurationAndControl Open / Close
 }
 
 
@@ -336,12 +341,14 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     ),
     0x00000060: MainParameterSpec(0x00000002, None),  # OperationalState.Start
     0x00000061: MainParameterSpec(0x00000003, None),  # RVCOperationalState.Resume
-    0x0000005F: MainParameterSpec(0x00000001, {"timeToAdd": 30}),  # MicrowaveOvenControl.AddMoreTime
+    # Unverified: OperationalState.Start wins on a Microwave Oven anyway; to verify on real devices.
+    # 0x0000005F: MainParameterSpec(0x00000001, {"timeToAdd": 30}),  # MicrowaveOvenControl.AddMoreTime
     0x00000050: MainParameterSpec(0x00000000, {"newMode": 0}),  # ModeSelect.ChangeToMode
     0x00000101: MainParameterSpec(0x00000001, {"PINCode": None}),  # DoorLock.UnlockDoor
     # 0x0000005C: MainParameterSpec(0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
     0x00000506: MainParameterSpec(0x00000000, None),  # MediaPlayback.Play
-    0x00000509: MainParameterSpec(0x00000000, {"keyCode": 0x44}),  # KeyPadInpud.SendKey.Play
+    # Unverified: a raw remote-key sender, shadowed by OnOff/MediaPlayback; to verify on real devices.
+    # 0x00000509: MainParameterSpec(0x00000000, {"keyCode": 0x44}),  # KeyPadInpud.SendKey.Play
     0x00000102: MainParameterSpec(
         0x00000000,
         None,
@@ -354,11 +361,14 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
         # ClosureControl.MoveTo{position=MoveToFullyOpen} — open is the everyday one-tap;
         # ClosureControl has no no-arg Open command (a latched closure may also need latch=False)
     ),
-    0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
-    0x0000009E: MainParameterSpec(0x00000000, {"newMode": 0}),  # WaterHeaterMode.ChangeToMode
-    0x00000553: MainParameterSpec(
-        0x00000000, {"streamUsage": 0, "originatingEndpointID": 0}
-    ),  # WebRTCTransportProvider.SolicitOffer
+    # Unverified: one-way (EnableCharging needs current limits) and stops a car charge; to verify on real devices.
+    # 0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
+    # Unverified: mode 0 is vendor-defined and may not exist; to verify on real devices.
+    # 0x0000009E: MainParameterSpec(0x00000000, {"newMode": 0}),  # WaterHeaterMode.ChangeToMode
+    # Unverified: needs a WebRTC requestor session on the hub; to verify on real devices.
+    # 0x00000553: MainParameterSpec(
+    #     0x00000000, {"streamUsage": 0, "originatingEndpointID": 0}
+    # ),  # WebRTCTransportProvider.SolicitOffer
     0x00000556: MainParameterSpec(0x00000000, None),  # Chime.PlayChimeSound
     0x00000081: MainParameterSpec(0x00000000, None),  # ValveConfigurationAndControl.Open
 }

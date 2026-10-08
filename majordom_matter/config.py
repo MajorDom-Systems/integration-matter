@@ -13,7 +13,7 @@ MATTER_SERVER = Service(
         "network_mode": "host",
         "userns_mode": "host",
         "user": "{host.uid}:{host.gid}",  # its data folder belongs to the hub
-        "environment": {"STORAGE_PATH": "/data", "NOBLE_BINDINGS": "dbus", "BLUETOOTH_ADAPTER": "0"},
-        "volumes": ["{data}:/data", "/run/dbus:/run/dbus:ro"],
+        "environment": {"STORAGE_PATH": "/data", "BLE_PROXY": "true"},  # Bluetooth comes from the hub, see ble_proxy
+        "volumes": ["{data}:/data"],
     },
 )

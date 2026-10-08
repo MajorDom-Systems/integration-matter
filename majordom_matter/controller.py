@@ -21,6 +21,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
+from majordom_matter.ble_proxy import MatterBLEProxy
 from majordom_matter.config import MATTER_SERVER
 
 from .exceptions import (
@@ -119,6 +120,11 @@ class MatterController(AbstractController):
             await self._matter_client.set_thread_operational_dataset(dataset)
 
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
+
+        # matter-server commissions over Bluetooth through the hub's radios, not its own
+        ble_url = self.dependencies.links["matter"].url.removesuffix("/ws") + "/ble"
+        ble_proxy = MatterBLEProxy(ble_url, self.dependencies.ble_discovery_service, self._matter_client_session)
+        self._background_tasks.append(asyncio.create_task(ble_proxy.run()))
 
         # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
         # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.

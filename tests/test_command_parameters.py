@@ -1,9 +1,13 @@
 """Command -> Parameter mapping: a command with arguments is a `struct` whose `fields` are its
 arguments, and its value is keyed by those sub-parameter ids (see the SDK's ParameterDataType)."""
 
-from typing import cast
+import base64
+import inspect
+from typing import cast, get_type_hints
 from uuid import UUID, uuid4, uuid5
 
+from chip.clusters import Objects
+from chip.clusters.ClusterObjects import Cluster, ClusterCommand
 from chip.clusters.Objects import (
     AccessControl,
     ApplicationLauncher,
@@ -13,11 +17,14 @@ from chip.clusters.Objects import (
     Messages,
     OnOff,
     ServiceArea,
+    Thermostat,
+    ThreadNetworkDirectory,
+    TlsClientManagement,
 )
 from majordom_integration_sdk.schemas.parameter import ParameterDataType
 from matter_server.client.models.node import MatterNode
 
-from majordom_matter.mapper import MatterMapper
+from majordom_matter.mapper import MatterMapper, _unwrap_optional
 
 DEVICE_ID = UUID(int=1)
 
@@ -81,3 +88,54 @@ def test_list_argument_round_trips_as_is():
     command = CameraAvStreamManagement.Commands.SetStreamPriorities
     data = _mapper().parse_data_for_command(command, {"streamPriorities": [1, 2]})
     assert data == {"streamPriorities": [1, 2]}
+
+
+def test_bytes_argument_is_base64_data():
+    command = Thermostat.Commands.SetActivePresetRequest
+    assert _field(Thermostat, command, "presetHandle").data_type == ParameterDataType.data
+    data = _mapper().parse_data_for_command(command, {"presetHandle": base64.b64encode(b"\x00\xff").decode()})
+    assert data == {"presetHandle": b"\x00\xff"}
+
+
+def _pin_code_commands() -> list[tuple[type[Cluster], type]]:
+    return [
+        (cluster, command)
+        for _, cluster in inspect.getmembers(Objects, inspect.isclass)
+        if issubclass(cluster, Cluster) and hasattr(cluster, "Commands")
+        for _, command in inspect.getmembers(cluster.Commands, inspect.isclass)
+        if issubclass(command, ClusterCommand)
+        and getattr(command, "is_client", True)
+        and _unwrap_optional(get_type_hints(command).get("PINCode")) is bytes
+    ]
+
+
+def test_typed_bytes_arguments_are_utf8_text():
+    typed = [(cluster, command, "PINCode") for cluster, command in _pin_code_commands()]
+    assert len(typed) >= 4  # DoorLock Lock/Unlock/UnlockWithTimeout/Unbolt
+    typed += [
+        (DoorLock, DoorLock.Commands.SetCredential, "credentialData"),
+        (TlsClientManagement, TlsClientManagement.Commands.ProvisionEndpoint, "hostname"),
+    ]
+    for cluster, command, name in typed:
+        assert _field(cluster, command, name).data_type == ParameterDataType.string, (command, name)
+        assert _mapper().parse_data_for_command(command, {name: "1234"}) == {name: b"1234"}
+
+
+def test_bytes_attribute_is_data_and_round_trips():
+    attribute = ThreadNetworkDirectory.Attributes.PreferredExtendedPanID
+    raw = b"\xde\xad\x00\xbe\xef\x00\x01\x02"
+
+    class _Node:
+        def get_attribute_value(self, endpoint_id, cluster_id, attribute_id):
+            return [attribute.attribute_id] if attribute_id == 0xFFFB else None
+
+    class _Endpoint:
+        def get_attribute_value(self, cluster_id, attribute_id):
+            return raw
+
+    mapper = _mapper()
+    params = mapper.parse_attributes(
+        DEVICE_ID, 1, ThreadNetworkDirectory.id, ThreadNetworkDirectory, _Endpoint(), cast(MatterNode, _Node())
+    )
+    assert [p.data_type for p in params] == [ParameterDataType.data]
+    assert mapper.parse_data_for_attribute(attribute, mapper.normalize_value(raw)) == raw

@@ -21,7 +21,7 @@ from chip.clusters.Objects import (
     ThreadNetworkDirectory,
     TlsClientManagement,
 )
-from majordom_integration_sdk.schemas.parameter import ParameterDataType
+from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterVisibility
 from matter_server.client.models.node import MatterNode
 
 from majordom_matter.mapper import MatterMapper, _unwrap_optional
@@ -139,3 +139,26 @@ def test_bytes_attribute_is_data_and_round_trips():
     )
     assert [p.data_type for p in params] == [ParameterDataType.data]
     assert mapper.parse_data_for_attribute(attribute, mapper.normalize_value(raw)) == raw
+
+
+def test_infrastructure_commands_are_hidden():
+    clusters = (
+        Objects.IcdManagement,
+        Objects.WiFiNetworkManagement,
+        Objects.ThreadBorderRouterManagement,
+        ThreadNetworkDirectory,
+        Objects.JointFabricDatastore,
+        Objects.JointFabricAdministrator,
+        Objects.TlsCertificateManagement,
+        TlsClientManagement,
+        Objects.UnitTesting,
+    )
+    for cluster in clusters:
+        params = _mapper().parse_commands(DEVICE_ID, 1, cluster.id, cluster, cast(MatterNode, _FakeNode()))
+        assert params and {p.visibility for p in params} == {ParameterVisibility.system}, cluster.__name__
+
+
+def test_aliro_reader_commands_are_hidden():
+    for command in (DoorLock.Commands.SetAliroReaderConfig, DoorLock.Commands.ClearAliroReaderConfig):
+        assert _command(DoorLock, command).visibility == ParameterVisibility.system
+    assert _command(DoorLock, DoorLock.Commands.UnlockDoor).visibility == ParameterVisibility.user

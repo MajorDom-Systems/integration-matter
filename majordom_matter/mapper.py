@@ -31,6 +31,7 @@ from .matter_spec import (
     MIN_MAX_VALUE,
     SYSTEM_ATTRIBUTES,
     SYSTEM_CLUSTERS,
+    SYSTEM_COMMANDS,
     TEXT_BYTES_FIELDS,
     AttributeKey,
     classify_attribute,
@@ -325,7 +326,7 @@ class MatterMapper:
 
             # Command visibility: system-cluster commands hidden; everyday one-tap actions ->
             # user; every other command (schedule/credential/log management) -> setting.
-            if on_system_cluster:
+            if on_system_cluster or (cluster_id, command_id) in SYSTEM_COMMANDS:
                 visibility = ParameterVisibility.system
             elif (cluster_id, command_id) in EVERYDAY_COMMANDS:
                 visibility = ParameterVisibility.user

@@ -54,6 +54,21 @@ SYSTEM_CLUSTERS: set[int] = {
     0x40,  # FixedLabel
     0x41,  # UserLabel
     0x62,  # ScenesManagement
+    0x46,  # IcdManagement
+    0x451,  # WiFiNetworkManagement
+    0x452,  # ThreadBorderRouterManagement
+    0x453,  # ThreadNetworkDirectory
+    0x752,  # JointFabricDatastore
+    0x753,  # JointFabricAdministrator
+    0x801,  # TlsCertificateManagement
+    0x802,  # TlsClientManagement
+    0xFFF1FC05,  # UnitTesting
+}
+
+# Commands hidden on otherwise user-facing clusters.
+SYSTEM_COMMANDS: set[tuple[int, int]] = {
+    (0x101, 0x28),  # DoorLock.SetAliroReaderConfig (Aliro crypto material, like the Aliro* attributes)
+    (0x101, 0x29),  # DoorLock.ClearAliroReaderConfig
 }
 
 SYSTEM_ATTRIBUTES: set[int] = {

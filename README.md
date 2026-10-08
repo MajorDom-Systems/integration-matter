@@ -67,13 +67,21 @@ CLI, watch mode, and the programmatic API.
   thermostats, covers, fans, appliances (verified against 30 Matter Virtual Device types).
 - **Credentials needed to pair:** `code` (manual pairing code) or `qr`.
 
-### Required harness
+### Needs
 
-- **Hardware adapters:** an 802.15.4 radio (e.g. a SkyConnect / Thread dongle) for Thread devices —
-  driven by matter-server / the OTBR, not this package directly.
-- **Third-party software services:** a **matter-server** instance reachable over WebSocket (declared in
-  `config.py`, run by the hub), and an **OpenThread Border Router (OTBR)** for Thread devices.
-- **OS / permissions:** BLE access for commissioning; mDNS on the LAN for on-network discovery.
+| Capability | Required | Provided by |
+|------------|----------|-------------|
+| `matter/ws` | yes | the `matter-server` service below; standalone, any matter-server you run |
+| `ip` (for `matter-server`) | yes | the host |
+| `ble` (for `matter-server`) | no | the host's Bluetooth adapter |
+| `thread/otbr-rest` (for `matter-server`) | no | a Thread border router: the hub's `otbr` or `multiprotocol` service on a Thread-capable stick. Without one, Matter works over Wi-Fi and Ethernet |
+
+- **Services it brings:** `matter-server` (`majordom_matter/config.py`), which the hub runs while
+  Matter is in use.
+- **Settings:** none.
+- **Context:** the hub's Wi-Fi (`context.wifi`) and Thread network (`context.thread_dataset`), handed
+  to matter-server so new devices join them.
+- **OS / permissions:** BLE access (D-Bus) for commissioning; mDNS on the LAN for on-network discovery.
 
 ### Protocol stack (OSI)
 

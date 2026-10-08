@@ -364,3 +364,23 @@ async def test_timed_invoke_follows_the_command(controller, monkeypatch):
         param = next(p for p in state.parameters if p.id == param_id)
         await ctrl.send_command(DeviceCommand(device_id=device_id, parameter_id=param.id, value=None), device, param)
     assert timeouts == [1000, None]
+
+
+async def test_hidden_main_candidate_does_not_block_a_visible_one(controller, monkeypatch):
+    from chip.clusters.Objects import LevelControl, OnOff
+
+    from majordom_matter.matter_spec import MainParameterSpec
+
+    monkeypatch.setattr(
+        "majordom_matter.controller.MAIN_PARAMETER_BY_CLUSTER",
+        {
+            LevelControl.id: MainParameterSpec(LevelControl.Commands.Step.command_id, None),  # a `setting`
+            OnOff.id: MainParameterSpec(OnOff.Commands.Toggle.command_id, None),
+        },
+    )
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        state = await repo.state(device_id, MatterDeviceState)
+    assert state.main_parameter == ctrl._mapper.command_parameter_uuid(device_id, 13, OnOff.id, 0x02)
+    assert state.can_set_main_parameter(state.main_parameter)

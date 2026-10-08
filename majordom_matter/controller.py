@@ -198,22 +198,23 @@ class MatterController(AbstractController):
         if credentials.value is None:
             raise MatterUnexpectedError("Matter commissioning requires a pairing code, but none was provided")
 
+        # matter-server may run without a Bluetooth adapter; then a non-network_only commission fails
+        # with "Bluetooth commissioning is not available", so only BLE discoveries may use BLE.
+        network_only = discovery.transport != "BLE"
+
         # Compare by value (==), not identity (is): `credentials.type` can arrive through a
         # schema layer that resolved CredentialsType via a different import path, yielding a
         # distinct enum class where `is` would never match. `==` on a str-enum compares the
         # underlying value and is robust to that (and semantically what we want anyway).
         if credentials.type == CredentialsType.qr:
-            commission_node = await self._matter_client.commission_with_code(str(credentials.value))
+            commission_node = await self._matter_client.commission_with_code(
+                str(credentials.value), network_only=network_only
+            )
         elif credentials.type == CredentialsType.code:
-            if discovery.transport == "BLE":
-                # commission_on_network only works for devices already reachable over IP
-                # (matter-server's own docstring: "for advanced usecases only, use
-                # commission_with_code for regular commissioning") — a BLE-discovered
-                # device has no IP yet, so it must go through commission_with_code instead,
-                # which chip-tool routes over BLE automatically based on the code.
-                commission_node = await self._matter_client.commission_with_code(str(credentials.value))
-            else:
-                commission_node = await self._matter_client.commission_on_network(int(credentials.value))
+            # The user enters the 11-digit manual pairing code, not the raw setup PIN that
+            # commission_on_network expects, so every code goes through commission_with_code.
+            manual_code = str(credentials.value).replace("-", "").replace(" ", "")
+            commission_node = await self._matter_client.commission_with_code(manual_code, network_only=network_only)
         else:
             raise MatterUnexpectedError("This credentials type is not supported")
 

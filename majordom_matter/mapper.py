@@ -31,6 +31,7 @@ from .matter_spec import (
     MIN_MAX_VALUE,
     SYSTEM_ATTRIBUTES,
     SYSTEM_CLUSTERS,
+    TEXT_BYTES_FIELDS,
     AttributeKey,
     classify_attribute,
 )
@@ -43,6 +44,13 @@ def _unwrap_optional(field_type: Any) -> Any:
         return field_type
     args = [a for a in get_args(field_type) if a not in (type(None), Nullable)]
     return args[0] if args else field_type
+
+
+def _parse_bytes(raw: Any, text: bool) -> bytes:
+    """A `string` field is UTF-8 text; a `data` one is base64, as normalize_value emits it."""
+    if isinstance(raw, str):
+        return raw.encode("utf-8") if text else base64.b64decode(raw, validate=True)
+    return bytes(raw)
 
 
 class MatterMapper:
@@ -251,12 +259,8 @@ class MatterMapper:
             elif isinstance(field_type, type) and issubclass(field_type, enum.Enum):
                 result[field.name] = field_type(int(raw))
             elif field_type in (bytes, bytearray):
-                if isinstance(raw, str):
-                    result[field.name] = raw.encode("utf-8")
-                elif isinstance(raw, (list, tuple)):
-                    result[field.name] = bytes(raw)
-                else:
-                    result[field.name] = bytes(raw) if not isinstance(raw, (bytes, bytearray)) else raw
+                key = (getattr(cmd_class, "cluster_id", None), getattr(cmd_class, "command_id", None), field.name)
+                result[field.name] = _parse_bytes(raw, key in TEXT_BYTES_FIELDS)
             else:
                 result[field.name] = raw
 
@@ -282,20 +286,13 @@ class MatterMapper:
         attr_type = getattr(attribute_cls, "attribute_type", None)
         field_type = getattr(attr_type, "Type", None) if attr_type else None
 
-        # Unwrap Optional[X] / Union[X, None] — same as in parse_data_for_command
-        if get_origin(field_type):
-            args = [a for a in get_args(field_type) if a is not type(None)]
-            field_type = args[0] if args else field_type
+        field_type = _unwrap_optional(field_type)
 
         if isinstance(field_type, type) and issubclass(field_type, enum.Enum):
             return field_type(int(raw))
 
         if field_type in (bytes, bytearray):
-            if isinstance(raw, str):
-                return raw.encode("utf-8")
-            if isinstance(raw, (list, tuple)):
-                return bytes(raw)
-            return bytes(raw) if not isinstance(raw, (bytes, bytearray)) else raw
+            return _parse_bytes(raw, text=False)
 
         return raw
 
@@ -366,6 +363,9 @@ class MatterMapper:
                                         break
                             if matched is not None:
                                 data_type = matched
+
+                    if (cluster_id, command_id, field.name) in TEXT_BYTES_FIELDS:
+                        data_type = ParameterDataType.string
 
                     args.append(
                         Parameter(
@@ -479,7 +479,11 @@ class MatterMapper:
             value = self.apply_attribute_scale(cluster_id, attribute_id, raw_value)
 
             try:
-                data_type = self.get_parameter_data_type_from_value(self.normalize_value(value))
+                data_type = (
+                    ParameterDataType.data
+                    if _unwrap_optional(getattr(attr_type, "Type", None)) is bytes
+                    else self.get_parameter_data_type_from_value(self.normalize_value(value))
+                )
             except ValueError:
                 # Value type isn't one we know how to represent yet. Skip just this attribute
                 # rather than aborting the whole pairing — the device stays usable, only this

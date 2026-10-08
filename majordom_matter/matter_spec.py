@@ -190,6 +190,17 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
     int: ParameterDataType.integer,
     float: ParameterDataType.decimal,
     str: ParameterDataType.string,
+    bytes: ParameterDataType.data,
+}
+
+# `bytes` command fields the user types as text: a UTF-8 `string` instead of base64 `data`.
+TEXT_BYTES_FIELDS: set[tuple[int, int, str]] = {
+    (0x101, 0x00, "PINCode"),  # DoorLock.LockDoor
+    (0x101, 0x01, "PINCode"),  # DoorLock.UnlockDoor
+    (0x101, 0x03, "PINCode"),  # DoorLock.UnlockWithTimeout
+    (0x101, 0x27, "PINCode"),  # DoorLock.UnboltDoor
+    (0x101, 0x22, "credentialData"),  # DoorLock.SetCredential (a PIN; RFID/biometrics are enrolled at the lock)
+    (0x802, 0x00, "hostname"),  # TlsClientManagement.ProvisionEndpoint
 }
 
 

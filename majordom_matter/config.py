@@ -11,6 +11,7 @@ MATTER_SERVER = Service(
         "image": "ghcr.io/matter-js/matterjs-server:dev",
         "network_mode": "host",
         "userns_mode": "host",
+        "user": "{host.uid}:{host.gid}",  # its data folder belongs to the hub
         "environment": {"STORAGE_PATH": "/data", "NOBLE_BINDINGS": "dbus", "BLUETOOTH_ADAPTER": "0"},
         "volumes": ["{data}:/data", "/run/dbus:/run/dbus:ro"],
     },

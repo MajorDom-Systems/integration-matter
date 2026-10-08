@@ -8,7 +8,8 @@ MATTER_SERVER = Service(
     needs=[Need("ip"), Need("ble", required=False), Need("thread", ["otbr-rest"], required=False)],
     provides=[Endpoint("matter", "ws", "ws://127.0.0.1:5580/ws")],
     compose={
-        "image": "ghcr.io/matter-js/matterjs-server:dev",
+        # :dev pinned by digest (2026-10-08); bump on purpose
+        "image": "ghcr.io/matter-js/matterjs-server@sha256:bcaacf6b2b2df9ce2b929ad7469d5380a4d627f05f790e201d127e8b65af5b0e",  # noqa: E501
         "network_mode": "host",
         "userns_mode": "host",
         "user": "{host.uid}:{host.gid}",  # its data folder belongs to the hub

@@ -578,7 +578,6 @@ class MatterController(AbstractController):
         self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
     ):
         command_id = parameter.integration_data.command_id
-        time_requested_timeout = None
         if command_id is None or command_id < 0:
             raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
 
@@ -599,8 +598,7 @@ class MatterController(AbstractController):
             if not getattr(cmd_class, "is_client", True):
                 continue
 
-            if cluster.id == 0x00000101:  # DoorLock
-                time_requested_timeout = 1000
+            time_requested_timeout = 1000 if cmd_class.must_use_timed_invoke else None
             if isinstance(arguments, dict):
                 arguments = self._mapper.arguments_by_name(
                     command.device_id, endpoint_id, cluster.id, command_id, cmd_class, arguments

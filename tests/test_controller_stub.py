@@ -340,3 +340,27 @@ async def test_pairing_code_of_unknown_length_is_rejected(controller, value: str
         await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value=value))
     with_code.assert_not_awaited()
     on_network.assert_not_awaited()
+
+
+async def test_timed_invoke_follows_the_command(controller, monkeypatch):
+    from chip.clusters.Objects import AdministratorCommissioning, OnOff
+
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+        state = await repo.state(device_id, MatterDeviceState)
+    timeouts: list[int | None] = []
+
+    async def send_device_command(node_id, endpoint_id, command, timed_request_timeout_ms=None, **kwargs):
+        timeouts.append(timed_request_timeout_ms)
+
+    monkeypatch.setattr(ctrl._matter_client, "send_device_command", send_device_command)
+    for endpoint_id, cluster_id, command_id in (
+        (0, AdministratorCommissioning.id, AdministratorCommissioning.Commands.RevokeCommissioning.command_id),
+        (13, OnOff.id, OnOff.Commands.Toggle.command_id),
+    ):
+        param_id = ctrl._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, command_id)
+        param = next(p for p in state.parameters if p.id == param_id)
+        await ctrl.send_command(DeviceCommand(device_id=device_id, parameter_id=param.id, value=None), device, param)
+    assert timeouts == [1000, None]

@@ -132,9 +132,10 @@ class MatterController(AbstractController):
         self._ble_cancel = self.dependencies.ble_discovery_service.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
 
         device_nodes: list[int] = []
+        nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
         async with self.dependencies.make_device_repository() as device_repository:
             for device in await device_repository.get_all(as_=MatterDevice):
-                if node := self._matter_client.get_node(device.integration_data.node_id):
+                if node := nodes.get(device.integration_data.node_id):
                     self._subscription(device.id, node)
                     device_nodes.append(device.integration_data.node_id)
                 else:

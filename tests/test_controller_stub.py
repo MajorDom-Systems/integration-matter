@@ -453,3 +453,28 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
     await controller.start()
     assert controller._matter_client.networks == {"wifi": ("home", "secret"), "thread": "0e08abcd"}
     await controller.stop()
+
+
+async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monkeypatch):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
+        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+    )
+    async with deps.make_device_repository() as repo:  # left by a commissioning that failed, or a reset matter-server
+        await repo.save(
+            MatterDeviceState(
+                id=UUID(int=7),
+                name="Bulb",
+                room_id=UUID(int=1),
+                transport="BLE",
+                integration="Matter",
+                manufacturer=None,
+                parameters=[],
+                integration_data=MatterDeviceIntegrationData(node_id=0),
+            )
+        )
+    controller = MatterController(deps)
+    await controller.start()
+    async with deps.make_device_repository() as repo:
+        assert (await repo.get(UUID(int=7), as_=MatterDevice)).available is False
+    await controller.stop()

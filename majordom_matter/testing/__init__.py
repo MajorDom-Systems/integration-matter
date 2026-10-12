@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from matter_server.client.models.node import MatterNode
+from matter_server.common.errors import NodeNotExists
 from matter_server.common.helpers.util import dataclass_from_dict
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
@@ -89,10 +90,10 @@ class FakeMatterClient:
     def get_nodes(self) -> list[MatterNode]:
         return [self._node] if self._commissioned else []
 
-    def get_node(self, node_id: int) -> MatterNode | None:
+    def get_node(self, node_id: int) -> MatterNode:
         if self._commissioned and node_id == self._node.node_id:
             return self._node
-        return None
+        raise NodeNotExists(f"Node {node_id} does not exist or is not yet interviewed")  # as the real client
 
     async def remove_node(self, node_id: int) -> None:
         self.removed_nodes.append(node_id)

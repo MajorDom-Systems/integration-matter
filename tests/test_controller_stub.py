@@ -478,3 +478,19 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
     async with deps.make_device_repository() as repo:
         assert (await repo.get(UUID(int=7), as_=MatterDevice)).available is False
     await controller.stop()
+
+
+async def test_a_device_that_never_finished_commissioning_unpairs(controller):
+    controller, _ = controller
+    device = MatterDevice(
+        id=UUID(int=8),
+        name="Bulb",
+        room_id=UUID(int=1),
+        transport="BLE",
+        integration="Matter",
+        manufacturer=None,
+        parameters=[],
+        integration_data=MatterDeviceIntegrationData(node_id=0),
+    )
+    await controller.unpair(device)
+    assert controller._matter_client.removed_nodes == []

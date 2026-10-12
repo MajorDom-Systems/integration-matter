@@ -96,6 +96,8 @@ class FakeMatterClient:
         raise NodeNotExists(f"Node {node_id} does not exist or is not yet interviewed")  # as the real client
 
     async def remove_node(self, node_id: int) -> None:
+        if not (self._commissioned and node_id == self._node.node_id):
+            raise NodeNotExists(f"Node {node_id} does not exist")  # as matter-server answers
         self.removed_nodes.append(node_id)
         if node_id == self._node.node_id:
             self._commissioned = False

@@ -332,7 +332,10 @@ class MatterController(AbstractController):
         return device_id
 
     async def unpair(self, device: MatterDevice):
-        await self._require_matter_client().remove_node(device.node_id)
+        client = self._require_matter_client()
+        # a device that never finished commissioning (or that matter-server lost) has no node to remove
+        if any(node.node_id == device.node_id for node in client.get_nodes()):
+            await client.remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
         command = Identify.Commands.Identify()

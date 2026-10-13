@@ -4,6 +4,7 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass
+from math import floor, log10
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
     ATTRIBUTE_SCALE,
     ATTRIBUTE_UNITS,
+    COMMAND_FIELD_SCALE,
     EVERYDAY_COMMANDS,
     FIELD_TYPE_TO_DATA_TYPE,
     METADATA_SOURCES,
@@ -52,6 +54,13 @@ def _parse_bytes(raw: Any, text: bool) -> bytes:
     if isinstance(raw, str):
         return raw.encode("utf-8") if text else base64.b64decode(raw, validate=True)
     return bytes(raw)
+
+
+def _to_wire(raw: Any, scale: float | None) -> Any:
+    """The inverse of apply_attribute_scale: a display-unit number back to its wire integer."""
+    if scale is None or not isinstance(raw, int | float) or isinstance(raw, bool):
+        return raw
+    return round(raw / scale)
 
 
 class MatterMapper:
@@ -195,7 +204,8 @@ class MatterMapper:
         if is_dataclass(value) and hasattr(value, "energy"):
             value = value.energy
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return value * scale
+            # Round off float noise (2183 * 0.01 = 21.830000000000002) to the scale's decimals.
+            return round(value * scale, max(0, -floor(log10(scale))))
         return value
 
     def resolve_runtime_bounds(
@@ -254,16 +264,17 @@ class MatterMapper:
                 continue
             raw = data[field.name]
             field_type = _unwrap_optional(hints.get(field.name, field.type))
+            key = (getattr(cmd_class, "cluster_id", None), getattr(cmd_class, "command_id", None), field.name)
 
             if raw is None:
                 result[field.name] = NullValue
             elif isinstance(field_type, type) and issubclass(field_type, enum.Enum):
                 result[field.name] = field_type(int(raw))
             elif field_type in (bytes, bytearray):
-                key = (getattr(cmd_class, "cluster_id", None), getattr(cmd_class, "command_id", None), field.name)
                 result[field.name] = _parse_bytes(raw, key in TEXT_BYTES_FIELDS)
             else:
-                result[field.name] = raw
+                scaled = COMMAND_FIELD_SCALE.get(key)
+                result[field.name] = _to_wire(raw, scaled.scale if scaled else None)
 
         return result
 
@@ -295,7 +306,8 @@ class MatterMapper:
         if field_type in (bytes, bytearray):
             return _parse_bytes(raw, text=False)
 
-        return raw
+        key = AttributeKey(getattr(attribute_cls, "cluster_id", -1), getattr(attribute_cls, "attribute_id", -1))
+        return _to_wire(raw, ATTRIBUTE_SCALE.get(key))
 
     # -------------------------------------------------------------------------
     # Node parsing: matter SDK cluster data -> MatterParameter
@@ -367,13 +379,17 @@ class MatterMapper:
 
                     if (cluster_id, command_id, field.name) in TEXT_BYTES_FIELDS:
                         data_type = ParameterDataType.string
+                    scaled = COMMAND_FIELD_SCALE.get((cluster_id, command_id, field.name))
+                    if scaled is not None:
+                        data_type = ParameterDataType.decimal
 
                     args.append(
                         Parameter(
                             id=self.command_field_uuid(device_id, endpoint_id, cluster_id, command_id, field.name),
                             name=field.name,
                             data_type=data_type,
-                            unit=ParameterUnit.plain,
+                            min_step=scaled.scale if scaled else None,
+                            unit=scaled.unit if scaled else ParameterUnit.plain,
                             role=ParameterRole.control,
                             valid_values=valid_values,
                             visibility=ParameterVisibility.setting,
@@ -473,10 +489,8 @@ class MatterMapper:
             min_value, max_value = self.resolve_runtime_bounds(  # priority 1: device's own limit attrs
                 key, cluster_id, endpoint, name, min_value, max_value
             )
-            scale = ATTRIBUTE_SCALE.get(AttributeKey(cluster_id, attribute_id))
-            if scale is not None:
-                min_value = min_value * scale if min_value is not None else None
-                max_value = max_value * scale if max_value is not None else None
+            min_value = self.apply_attribute_scale(cluster_id, attribute_id, min_value)
+            max_value = self.apply_attribute_scale(cluster_id, attribute_id, max_value)
             value = self.apply_attribute_scale(cluster_id, attribute_id, raw_value)
 
             try:

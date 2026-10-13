@@ -155,6 +155,15 @@ ATTRIBUTE_SCALE: dict[AttributeKey, float] = {
     AttributeKey(0x91, 0x1): 1e-6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> kWh
     AttributeKey(0x404, 0x0): 0.1,  # FlowMeasurement.MeasuredValue: deci-m3/h -> m3/h
     AttributeKey(0x403, 0x0): 100,  # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
+    # Matter temperatures are 0.01 °C integers; the calibration and setback are 0.1 °C ones.
+    AttributeKey(0x201, 0x0): 0.01,  # Thermostat.LocalTemperature
+    AttributeKey(0x201, 0x1): 0.01,  # Thermostat.OutdoorTemperature
+    AttributeKey(0x201, 0x10): 0.1,  # Thermostat.LocalTemperatureCalibration
+    AttributeKey(0x201, 0x11): 0.01,  # Thermostat.OccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x12): 0.01,  # Thermostat.OccupiedHeatingSetpoint
+    AttributeKey(0x201, 0x34): 0.1,  # Thermostat.OccupiedSetback
+    AttributeKey(0x402, 0x0): 0.01,  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x56, 0x0): 0.01,  # TemperatureControl.TemperatureSetpoint
 }
 
 
@@ -163,7 +172,7 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
     AttributeKey(0x0300, 0x0000): 1,  # CurrentHue (verified: id 0x0000, uint8, step 1)
     AttributeKey(0x0300, 0x0001): 1,  # CurrentSaturation (verified: id 0x0001, uint8, step 1)
     AttributeKey(0x0300, 0x0007): 1,  # ColorTemperatureMireds (verified: id 0x0007, uint16, step 1)
-    AttributeKey(0x0201, 0x0010): 0.01,  # LocalTemperatureCalibration (SignedTemperature, -2.5°C to 2.5°C)
+    AttributeKey(0x0201, 0x0010): 0.1,  # LocalTemperatureCalibration (SignedTemperature, -2.5°C to 2.5°C)
     AttributeKey(0x0201, 0x0011): 0.01,  # OccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0012): 0.01,  # OccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0013): 0.01,  # UnoccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
@@ -206,6 +215,20 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
     float: ParameterDataType.decimal,
     str: ParameterDataType.string,
     bytes: ParameterDataType.data,
+}
+
+
+class ScaledField(NamedTuple):
+    """A command field sent in a scaled wire unit, like ATTRIBUTE_SCALE: the user enters (and
+    default_params give) `unit`; the wire value is that divided by `scale`."""
+
+    unit: ParameterUnit
+    scale: float
+
+
+COMMAND_FIELD_SCALE: dict[tuple[int, int, str], ScaledField] = {
+    (0x56, 0x0, "targetTemperature"): ScaledField(ParameterUnit.celsius, 0.01),  # TemperatureControl.SetTemperature
+    (0x201, 0x0, "amount"): ScaledField(ParameterUnit.celsius, 0.1),  # Thermostat.SetpointRaiseLower
 }
 
 # `bytes` command fields the user types as text: a UTF-8 `string` instead of base64 `data`.
@@ -350,7 +373,7 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000202: MainParameterSpec(0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
     0x00000056: MainParameterSpec(
         0x00000000,
-        {"targetTemperature": 22},
+        {"targetTemperature": 22},  # °C, see COMMAND_FIELD_SCALE
         # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are
         # feature-gated & mutually exclusive; targetTemperature covers the common "TN" case)
     ),

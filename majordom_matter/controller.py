@@ -16,12 +16,12 @@ from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
-from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
 from majordom_matter.ble_proxy import MatterBLEProxy
+from majordom_matter.client import MatterClient
 from majordom_matter.config import MATTER_SERVER
 
 from .exceptions import (

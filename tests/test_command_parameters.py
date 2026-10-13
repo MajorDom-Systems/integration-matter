@@ -18,6 +18,7 @@ from chip.clusters.Objects import (
     OnOff,
     ServiceArea,
     TemperatureControl,
+    TemperatureMeasurement,
     Thermostat,
     ThreadNetworkDirectory,
     TlsClientManagement,
@@ -167,20 +168,57 @@ def test_aliro_reader_commands_are_hidden():
     assert _command(DoorLock, DoorLock.Commands.UnlockDoor).visibility == ParameterVisibility.user
 
 
+# Matter's int16 temperature types are 0.01 °C; the 8-bit Signed/UnsignedTemperature ones are 0.1 °C.
+TEMPERATURE_SCALES: dict[AttributeKey, float] = {
+    **{
+        AttributeKey(Thermostat.id, attribute_id): 0.01
+        for attribute_id in (0x00, 0x01, 0x03, 0x04, 0x05, 0x06, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x31)
+    },
+    AttributeKey(Thermostat.id, 0x46): 0.01,  # ACCoilTemperature
+    **{
+        AttributeKey(Thermostat.id, attribute_id): 0.1
+        for attribute_id in (0x10, 0x19, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A)
+    },
+    **{AttributeKey(TemperatureControl.id, attribute_id): 0.01 for attribute_id in (0x00, 0x01, 0x02, 0x03)},
+    **{AttributeKey(TemperatureMeasurement.id, attribute_id): 0.01 for attribute_id in (0x00, 0x01, 0x02, 0x03)},
+}
+
+
 def test_temperature_attributes_read_and_write_in_celsius():
-    # Matter temperatures are 0.01 °C integers on the wire; the calibration and setback are 0.1 °C.
     mapper = _mapper()
     celsius = {key for key, unit in ATTRIBUTE_UNITS.items() if unit is ParameterUnit.celsius} | {
         AttributeKey(*key) for key, (_visibility, _role, unit) in MATTER_HA_ATTRIBUTE_UX.items() if unit == "celsius"
     }
-    tenths = {AttributeKey(Thermostat.id, 0x10), AttributeKey(Thermostat.id, 0x34)}
-    assert AttributeKey(TemperatureControl.id, 0x00) in celsius
-    for key in celsius:
-        raw, expected = (3, 0.3) if key in tenths else (2183, 21.83)
+    assert celsius == TEMPERATURE_SCALES.keys()
+    for key, scale in TEMPERATURE_SCALES.items():
+        raw, expected = (3, 0.3) if scale == 0.1 else (2183, 21.83)
         assert mapper.apply_attribute_scale(key.cluster_id, key.attribute_id, raw) == expected, key
 
     assert mapper.parse_data_for_attribute(Thermostat.Attributes.OccupiedHeatingSetpoint, 21.83) == 2183
+    assert mapper.parse_data_for_attribute(Thermostat.Attributes.UnoccupiedHeatingSetpoint, 21.83) == 2183
     assert mapper.parse_data_for_attribute(Thermostat.Attributes.LocalTemperatureCalibration, -0.3) == -3
+    assert mapper.parse_data_for_attribute(Thermostat.Attributes.MinSetpointDeadBand, 0.3) == 3
+
+
+def _temperature_setpoint(values: dict[int, int]):
+    class _Node:
+        def get_attribute_value(self, endpoint_id, cluster_id, attribute_id):
+            return list(values) if attribute_id == 0xFFFB else None
+
+    class _Endpoint:
+        def get_attribute_value(self, cluster_id, attribute_id):
+            return values.get(attribute_id)
+
+    params = _mapper().parse_attributes(
+        DEVICE_ID, 1, TemperatureControl.id, TemperatureControl, _Endpoint(), cast(MatterNode, _Node())
+    )
+    return next(p for p in params if p.integration_data.attribute_id == 0x00)
+
+
+def test_temperature_setpoint_takes_bounds_and_step_from_the_device():
+    param = _temperature_setpoint({0x00: 2200, 0x01: 1600, 0x02: 3000, 0x03: 50})
+    assert (param.min_value, param.max_value, param.min_step, param.unit) == (16, 30, 0.5, ParameterUnit.celsius)
+    assert _temperature_setpoint({0x00: 2200}).min_step == 0.01
 
 
 def test_temperature_bounds_are_celsius():

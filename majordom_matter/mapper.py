@@ -9,7 +9,7 @@ from typing import Any, Union, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 from chip.clusters.CHIPClusters import ChipClusters
-from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
+from chip.clusters.ClusterObjects import ALL_ATTRIBUTES, ALL_CLUSTERS, ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Types import Nullable, NullValue
 from chip.tlv import TLVReader
 from majordom_integration_sdk.schemas.device import CredentialsType
@@ -20,7 +20,8 @@ from majordom_integration_sdk.schemas.parameter import (
     ParameterUnit,
     ParameterVisibility,
 )
-from matter_server.client.models.node import MatterNode
+from matter_server.client.models.node import MatterNode, get_object_params
+from matter_server.common.helpers.util import parse_value
 
 from .matter_spec import (
     ATTRIBUTE_MIN_STEPS,
@@ -207,6 +208,15 @@ class MatterMapper:
             # Round off float noise (2183 * 0.01 = 21.830000000000002) to the scale's decimals.
             return round(value * scale, max(0, -floor(log10(scale))))
         return value
+
+    def parse_raw_attribute(self, cluster_id: int, attribute_id: int, raw: Any) -> Any:
+        """A subscription update is matter-server's raw JSON (a struct keyed by field id); parse it
+        into the chip type the node holds, as MatterEndpoint.set_attribute_value does."""
+        attribute_class = ALL_ATTRIBUTES.get(cluster_id, {}).get(attribute_id)
+        if attribute_class is None:
+            return raw
+        name, attribute_type = get_object_params(ALL_CLUSTERS[cluster_id].descriptor, attribute_id)
+        return parse_value(name, raw, attribute_type, attribute_class().value)
 
     def attribute_value(self, cluster_id: int, attribute_id: int, value: Any) -> Any:
         """A raw attribute value as the Hub stores it — one path for pairing, fetch and the subscription."""

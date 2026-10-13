@@ -537,7 +537,9 @@ class MatterController(AbstractController):
             event = DeviceParameterChange(
                 device_id=device_id,
                 parameter_id=parameter_id,
-                value=self._mapper.attribute_value(cluster_id, attribute_id, new_value),
+                value=self._mapper.attribute_value(
+                    cluster_id, attribute_id, self._mapper.parse_raw_attribute(cluster_id, attribute_id, new_value)
+                ),
             )
             asyncio.create_task(self.dependencies.output.controller_did_receive_events(self, [event]))
 

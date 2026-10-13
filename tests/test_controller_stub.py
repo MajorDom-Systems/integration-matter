@@ -407,3 +407,35 @@ async def test_fetch_normalizes_values_like_the_subscription(controller):
     assert fetched[last_network_id] == subscribed == "AQL/"
     assert fetched[server_list] == [29, 31, 40, 42, 48, 49, 50, 51, 52, 60, 62, 63, 64]
     assert fetched[capability_minima] == {"caseSessionsPerFabric": 3, "subscriptionsPerFabric": 65535}
+
+
+async def test_subscription_parses_raw_json_like_fetch(controller):
+    from chip.clusters.Objects import BasicInformation, ElectricalEnergyMeasurement
+    from matter_server.common.models import EventType
+
+    ctrl, output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+
+    def subscribed(parameter_id: UUID):
+        return next((e.value for e in reversed(output.events) if e.parameter_id == parameter_id), None)
+
+    # matter-server pushes raw JSON: a struct keyed by field id, not by name.
+    capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
+    ctrl._matter_client.fire_attribute_update("0/40/19", {"0": 4, "1": 3})
+    await _wait(lambda: subscribed(capability_minima) is not None)
+    pushed = subscribed(capability_minima)
+    before = len(output.events)
+    await ctrl.fetch(device)
+    fetched = {e.parameter_id: e.value for e in output.events[before:]}
+    assert pushed == fetched[capability_minima]
+    assert fetched[capability_minima] == {"caseSessionsPerFabric": 4, "subscriptionsPerFabric": 3}
+
+    # A scaled struct: the energy (mWh) is unwrapped and scaled to kWh, as pairing/fetch do.
+    cluster_id = ElectricalEnergyMeasurement.id
+    energy = ctrl._mapper.attribute_parameter_uuid(device_id, 1, cluster_id, 0x01)
+    ctrl._make_callback(device_id, energy, cluster_id, 0x01)(EventType.ATTRIBUTE_UPDATED, {"0": 5_000_000})
+    await _wait(lambda: subscribed(energy) is not None)
+    parsed = ElectricalEnergyMeasurement.Structs.EnergyMeasurementStruct(energy=5_000_000)
+    assert subscribed(energy) == ctrl._mapper.attribute_value(cluster_id, 0x01, parsed) == 5

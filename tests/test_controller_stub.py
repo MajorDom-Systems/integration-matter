@@ -384,3 +384,26 @@ async def test_hidden_main_candidate_does_not_block_a_visible_one(controller, mo
         state = await repo.state(device_id, MatterDeviceState)
     assert state.main_parameter == ctrl._mapper.command_parameter_uuid(device_id, 13, OnOff.id, 0x02)
     assert state.can_set_main_parameter(state.main_parameter)
+
+
+async def test_fetch_normalizes_values_like_the_subscription(controller):
+    from chip.clusters.Objects import BasicInformation, Descriptor, NetworkCommissioning
+
+    ctrl, output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+    last_network_id = ctrl._mapper.attribute_parameter_uuid(device_id, 0, NetworkCommissioning.id, 0x06)
+    server_list = ctrl._mapper.attribute_parameter_uuid(device_id, 0, Descriptor.id, 0x01)
+    capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
+
+    ctrl._matter_client.fire_attribute_update("0/49/6", b"\x01\x02\xff")  # bytes
+    await _wait(lambda: any(e.parameter_id == last_network_id for e in output.events))
+    subscribed = next(e.value for e in output.events if e.parameter_id == last_network_id)
+    before = len(output.events)
+    await ctrl.fetch(device)
+    fetched = {e.parameter_id: e.value for e in output.events[before:]}
+
+    assert fetched[last_network_id] == subscribed == "AQL/"
+    assert fetched[server_list] == [29, 31, 40, 42, 48, 49, 50, 51, 52, 60, 62, 63, 64]
+    assert fetched[capability_minima] == {"caseSessionsPerFabric": 3, "subscriptionsPerFabric": 65535}

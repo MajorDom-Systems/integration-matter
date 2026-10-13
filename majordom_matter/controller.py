@@ -272,9 +272,11 @@ class MatterController(AbstractController):
                                     f"(endpoint {endpoint_id}, cluster {cluster_id})"
                                 )
                             value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
-                            value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                             device.parameters.append(
-                                MatterParameterState(**parameter.__dict__, value=self._mapper.normalize_value(value))
+                                MatterParameterState(
+                                    **parameter.__dict__,
+                                    value=self._mapper.attribute_value(cluster_id, attribute_id, value),
+                                )
                             )
 
             main_parameter, default_value = self._get_main_parameter(device.id, node, device.parameters)
@@ -327,7 +329,6 @@ class MatterController(AbstractController):
                         continue
                     attribute_id = getattr(attribute, "attribute_id", -1)
                     value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
-                    value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                     parameter_id = self._mapper.attribute_parameter_uuid(
                         device.id, endpoint_id, cluster_id, attribute_id
                     )
@@ -335,7 +336,7 @@ class MatterController(AbstractController):
                         DeviceParameterChange(
                             device_id=device.id,
                             parameter_id=parameter_id,
-                            value=value if isinstance(value, str | int | float | bool) else None,
+                            value=self._mapper.attribute_value(cluster_id, attribute_id, value),
                         )
                     )
 
@@ -536,9 +537,7 @@ class MatterController(AbstractController):
             event = DeviceParameterChange(
                 device_id=device_id,
                 parameter_id=parameter_id,
-                value=self._mapper.normalize_value(
-                    self._mapper.apply_attribute_scale(cluster_id, attribute_id, new_value)
-                ),
+                value=self._mapper.attribute_value(cluster_id, attribute_id, new_value),
             )
             asyncio.create_task(self.dependencies.output.controller_did_receive_events(self, [event]))
 

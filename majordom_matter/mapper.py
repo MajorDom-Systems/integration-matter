@@ -208,6 +208,10 @@ class MatterMapper:
             return round(value * scale, max(0, -floor(log10(scale))))
         return value
 
+    def attribute_value(self, cluster_id: int, attribute_id: int, value: Any) -> Any:
+        """A raw attribute value as the Hub stores it — one path for pairing, fetch and the subscription."""
+        return self.normalize_value(self.apply_attribute_scale(cluster_id, attribute_id, value))
+
     def resolve_runtime_bounds(
         self, key, cluster_id: int, endpoint, name: str, default_min, default_max
     ) -> tuple[Any, Any]:

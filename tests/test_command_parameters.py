@@ -17,14 +17,17 @@ from chip.clusters.Objects import (
     Messages,
     OnOff,
     ServiceArea,
+    TemperatureControl,
     Thermostat,
     ThreadNetworkDirectory,
     TlsClientManagement,
 )
-from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterVisibility
+from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterUnit, ParameterVisibility
 from matter_server.client.models.node import MatterNode
 
 from majordom_matter.mapper import MatterMapper, _unwrap_optional
+from majordom_matter.matter_spec import ATTRIBUTE_UNITS, MAIN_PARAMETER_BY_CLUSTER, AttributeKey
+from majordom_matter.matter_spec_ha import MATTER_HA_ATTRIBUTE_UX
 
 DEVICE_ID = UUID(int=1)
 
@@ -162,3 +165,52 @@ def test_aliro_reader_commands_are_hidden():
     for command in (DoorLock.Commands.SetAliroReaderConfig, DoorLock.Commands.ClearAliroReaderConfig):
         assert _command(DoorLock, command).visibility == ParameterVisibility.system
     assert _command(DoorLock, DoorLock.Commands.UnlockDoor).visibility == ParameterVisibility.user
+
+
+def test_temperature_attributes_read_and_write_in_celsius():
+    # Matter temperatures are 0.01 °C integers on the wire; the calibration and setback are 0.1 °C.
+    mapper = _mapper()
+    celsius = {key for key, unit in ATTRIBUTE_UNITS.items() if unit is ParameterUnit.celsius} | {
+        AttributeKey(*key) for key, (_visibility, _role, unit) in MATTER_HA_ATTRIBUTE_UX.items() if unit == "celsius"
+    }
+    tenths = {AttributeKey(Thermostat.id, 0x10), AttributeKey(Thermostat.id, 0x34)}
+    assert AttributeKey(TemperatureControl.id, 0x00) in celsius
+    for key in celsius:
+        raw, expected = (3, 0.3) if key in tenths else (2183, 21.83)
+        assert mapper.apply_attribute_scale(key.cluster_id, key.attribute_id, raw) == expected, key
+
+    assert mapper.parse_data_for_attribute(Thermostat.Attributes.OccupiedHeatingSetpoint, 21.83) == 2183
+    assert mapper.parse_data_for_attribute(Thermostat.Attributes.LocalTemperatureCalibration, -0.3) == -3
+
+
+def test_temperature_bounds_are_celsius():
+    values = {0x12: 2000, 0x03: 700, 0x04: 3000}  # OccupiedHeatingSetpoint <- AbsMin/MaxHeatSetpointLimit
+
+    class _Node:
+        def get_attribute_value(self, endpoint_id, cluster_id, attribute_id):
+            return [0x12] if attribute_id == 0xFFFB else None
+
+    class _Endpoint:
+        def get_attribute_value(self, cluster_id, attribute_id):
+            return values.get(attribute_id)
+
+    [param] = _mapper().parse_attributes(
+        DEVICE_ID, 1, Thermostat.id, Thermostat, _Endpoint(), cast(MatterNode, _Node())
+    )
+    assert (param.min_value, param.max_value, param.unit) == (7, 30, ParameterUnit.celsius)
+
+
+def test_temperature_command_fields_are_celsius():
+    set_temperature = TemperatureControl.Commands.SetTemperature
+    field = _field(TemperatureControl, set_temperature, "targetTemperature")
+    assert (field.data_type, field.unit) == (ParameterDataType.decimal, ParameterUnit.celsius)
+    default = MAIN_PARAMETER_BY_CLUSTER[TemperatureControl.id].default_params
+    assert isinstance(default, dict)
+    assert _mapper().parse_data_for_command(set_temperature, default) == {"targetTemperature": 2200}
+    assert _mapper().parse_data_for_command(set_temperature, {"targetTemperature": 21.83}) == {
+        "targetTemperature": 2183
+    }
+
+    raise_lower = Thermostat.Commands.SetpointRaiseLower  # amount is in 0.1 °C steps
+    assert _field(Thermostat, raise_lower, "amount").unit == ParameterUnit.celsius
+    assert _mapper().parse_data_for_command(raise_lower, {"mode": 0, "amount": 1.5})["amount"] == 15

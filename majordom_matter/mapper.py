@@ -241,6 +241,15 @@ class MatterMapper:
                 )
         return min_v, max_v
 
+    def resolve_runtime_step(self, key: AttributeKey, endpoint, default: int | float | None) -> int | float | None:
+        """A parameter's step from the device's own step attribute (in the parameter's wire unit),
+        else the spec's ATTRIBUTE_MIN_STEPS default."""
+        source = METADATA_SOURCES.get(key)
+        if source is None or source.step_attr is None:
+            return default
+        raw = self.normalize_value(endpoint.get_attribute_value(key.cluster_id, source.step_attr))
+        return default if raw is None else self.apply_attribute_scale(key.cluster_id, key.attribute_id, raw)
+
     def get_min_max_value(self, attribute, value) -> tuple[int | None, int | None]:
         """
         Encodes the attribute value to TLV to discover its wire type,
@@ -522,7 +531,7 @@ class MatterMapper:
                     min_value=min_value,
                     max_value=max_value,
                     valid_values=valid_values,
-                    min_step=ATTRIBUTE_MIN_STEPS.get(AttributeKey(cluster_id, attribute_id)),
+                    min_step=self.resolve_runtime_step(key, endpoint, ATTRIBUTE_MIN_STEPS.get(key)),
                     # Our spec table wins; the harvested HA unit fills gaps it leaves plain.
                     unit=ATTRIBUTE_UNITS.get(key, spec.unit or ParameterUnit.plain),
                     role=role,

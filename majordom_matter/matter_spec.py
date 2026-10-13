@@ -144,6 +144,32 @@ ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
         0x403, 0x0
     ): ParameterUnit.pascal,  # PressureMeasurement.MeasuredValue (raw deci-kPa, see ATTRIBUTE_SCALE)
     AttributeKey(0x2F, 0xC): ParameterUnit.percentage,  # PowerSource.BatPercentRemaining
+    # The remaining temperatures (scaled below); Outdoor/Calibration/OccupiedSetback get celsius from the HA harvest.
+    AttributeKey(0x201, 0x3): ParameterUnit.celsius,  # Thermostat.AbsMinHeatSetpointLimit
+    AttributeKey(0x201, 0x4): ParameterUnit.celsius,  # Thermostat.AbsMaxHeatSetpointLimit
+    AttributeKey(0x201, 0x5): ParameterUnit.celsius,  # Thermostat.AbsMinCoolSetpointLimit
+    AttributeKey(0x201, 0x6): ParameterUnit.celsius,  # Thermostat.AbsMaxCoolSetpointLimit
+    AttributeKey(0x201, 0x13): ParameterUnit.celsius,  # Thermostat.UnoccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x14): ParameterUnit.celsius,  # Thermostat.UnoccupiedHeatingSetpoint
+    AttributeKey(0x201, 0x15): ParameterUnit.celsius,  # Thermostat.MinHeatSetpointLimit
+    AttributeKey(0x201, 0x16): ParameterUnit.celsius,  # Thermostat.MaxHeatSetpointLimit
+    AttributeKey(0x201, 0x17): ParameterUnit.celsius,  # Thermostat.MinCoolSetpointLimit
+    AttributeKey(0x201, 0x18): ParameterUnit.celsius,  # Thermostat.MaxCoolSetpointLimit
+    AttributeKey(0x201, 0x19): ParameterUnit.celsius,  # Thermostat.MinSetpointDeadBand
+    AttributeKey(0x201, 0x31): ParameterUnit.celsius,  # Thermostat.SetpointChangeAmount
+    AttributeKey(0x201, 0x35): ParameterUnit.celsius,  # Thermostat.OccupiedSetbackMin
+    AttributeKey(0x201, 0x36): ParameterUnit.celsius,  # Thermostat.OccupiedSetbackMax
+    AttributeKey(0x201, 0x37): ParameterUnit.celsius,  # Thermostat.UnoccupiedSetback
+    AttributeKey(0x201, 0x38): ParameterUnit.celsius,  # Thermostat.UnoccupiedSetbackMin
+    AttributeKey(0x201, 0x39): ParameterUnit.celsius,  # Thermostat.UnoccupiedSetbackMax
+    AttributeKey(0x201, 0x3A): ParameterUnit.celsius,  # Thermostat.EmergencyHeatDelta
+    AttributeKey(0x201, 0x46): ParameterUnit.celsius,  # Thermostat.ACCoilTemperature
+    AttributeKey(0x56, 0x1): ParameterUnit.celsius,  # TemperatureControl.MinTemperature
+    AttributeKey(0x56, 0x2): ParameterUnit.celsius,  # TemperatureControl.MaxTemperature
+    AttributeKey(0x56, 0x3): ParameterUnit.celsius,  # TemperatureControl.Step
+    AttributeKey(0x402, 0x1): ParameterUnit.celsius,  # TemperatureMeasurement.MinMeasuredValue
+    AttributeKey(0x402, 0x2): ParameterUnit.celsius,  # TemperatureMeasurement.MaxMeasuredValue
+    AttributeKey(0x402, 0x3): ParameterUnit.celsius,  # TemperatureMeasurement.Tolerance
 }
 
 # Multiplier applied to a raw attribute value to convert it into ATTRIBUTE_UNITS' base unit
@@ -155,15 +181,40 @@ ATTRIBUTE_SCALE: dict[AttributeKey, float] = {
     AttributeKey(0x91, 0x1): 1e-6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> kWh
     AttributeKey(0x404, 0x0): 0.1,  # FlowMeasurement.MeasuredValue: deci-m3/h -> m3/h
     AttributeKey(0x403, 0x0): 100,  # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
-    # Matter temperatures are 0.01 °C integers; the calibration and setback are 0.1 °C ones.
+    # Matter's int16 temperatures are 0.01 °C; the 8-bit Signed/UnsignedTemperature ones are 0.1 °C.
     AttributeKey(0x201, 0x0): 0.01,  # Thermostat.LocalTemperature
     AttributeKey(0x201, 0x1): 0.01,  # Thermostat.OutdoorTemperature
-    AttributeKey(0x201, 0x10): 0.1,  # Thermostat.LocalTemperatureCalibration
+    AttributeKey(0x201, 0x3): 0.01,  # Thermostat.AbsMinHeatSetpointLimit
+    AttributeKey(0x201, 0x4): 0.01,  # Thermostat.AbsMaxHeatSetpointLimit
+    AttributeKey(0x201, 0x5): 0.01,  # Thermostat.AbsMinCoolSetpointLimit
+    AttributeKey(0x201, 0x6): 0.01,  # Thermostat.AbsMaxCoolSetpointLimit
+    AttributeKey(0x201, 0x10): 0.1,  # Thermostat.LocalTemperatureCalibration (int8)
     AttributeKey(0x201, 0x11): 0.01,  # Thermostat.OccupiedCoolingSetpoint
     AttributeKey(0x201, 0x12): 0.01,  # Thermostat.OccupiedHeatingSetpoint
-    AttributeKey(0x201, 0x34): 0.1,  # Thermostat.OccupiedSetback
-    AttributeKey(0x402, 0x0): 0.01,  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x201, 0x13): 0.01,  # Thermostat.UnoccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x14): 0.01,  # Thermostat.UnoccupiedHeatingSetpoint
+    AttributeKey(0x201, 0x15): 0.01,  # Thermostat.MinHeatSetpointLimit
+    AttributeKey(0x201, 0x16): 0.01,  # Thermostat.MaxHeatSetpointLimit
+    AttributeKey(0x201, 0x17): 0.01,  # Thermostat.MinCoolSetpointLimit
+    AttributeKey(0x201, 0x18): 0.01,  # Thermostat.MaxCoolSetpointLimit
+    AttributeKey(0x201, 0x19): 0.1,  # Thermostat.MinSetpointDeadBand (int8)
+    AttributeKey(0x201, 0x31): 0.01,  # Thermostat.SetpointChangeAmount (TemperatureDifference)
+    AttributeKey(0x201, 0x34): 0.1,  # Thermostat.OccupiedSetback (uint8)
+    AttributeKey(0x201, 0x35): 0.1,  # Thermostat.OccupiedSetbackMin (uint8)
+    AttributeKey(0x201, 0x36): 0.1,  # Thermostat.OccupiedSetbackMax (uint8)
+    AttributeKey(0x201, 0x37): 0.1,  # Thermostat.UnoccupiedSetback (uint8)
+    AttributeKey(0x201, 0x38): 0.1,  # Thermostat.UnoccupiedSetbackMin (uint8)
+    AttributeKey(0x201, 0x39): 0.1,  # Thermostat.UnoccupiedSetbackMax (uint8)
+    AttributeKey(0x201, 0x3A): 0.1,  # Thermostat.EmergencyHeatDelta (uint8)
+    AttributeKey(0x201, 0x46): 0.01,  # Thermostat.ACCoilTemperature
     AttributeKey(0x56, 0x0): 0.01,  # TemperatureControl.TemperatureSetpoint
+    AttributeKey(0x56, 0x1): 0.01,  # TemperatureControl.MinTemperature
+    AttributeKey(0x56, 0x2): 0.01,  # TemperatureControl.MaxTemperature
+    AttributeKey(0x56, 0x3): 0.01,  # TemperatureControl.Step
+    AttributeKey(0x402, 0x0): 0.01,  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x402, 0x1): 0.01,  # TemperatureMeasurement.MinMeasuredValue
+    AttributeKey(0x402, 0x2): 0.01,  # TemperatureMeasurement.MaxMeasuredValue
+    AttributeKey(0x402, 0x3): 0.01,  # TemperatureMeasurement.Tolerance
 }
 
 
@@ -177,6 +228,16 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
     AttributeKey(0x0201, 0x0012): 0.01,  # OccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0013): 0.01,  # UnoccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0014): 0.01,  # UnoccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0015): 0.01,  # MinHeatSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0016): 0.01,  # MaxHeatSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0017): 0.01,  # MinCoolSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0018): 0.01,  # MaxCoolSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0019): 0.1,  # MinSetpointDeadBand (SignedTemperature, 0.1°C resolution)
+    AttributeKey(0x0201, 0x0034): 0.1,  # OccupiedSetback (UnsignedTemperature, 0.1°C resolution)
+    AttributeKey(0x0201, 0x0037): 0.1,  # UnoccupiedSetback (UnsignedTemperature, 0.1°C resolution)
+    AttributeKey(
+        0x0056, 0x0000
+    ): 0.01,  # TemperatureSetpoint (temperature type; the device's Step wins, see METADATA_SOURCES)
     AttributeKey(0x0402, 0x0000): 0.01,  # MeasuredValue (temperature type, 0.01°C resolution)
     AttributeKey(0x0405, 0x0000): 0.01,  # MeasuredValue (0.01% resolution)
     AttributeKey(0x0403, 0x0000): 10,  # MeasuredValue (raw step 0.1 deci-kPa, scaled x100 to Pa -> 10 Pa)
@@ -188,12 +249,13 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
 
 
 class MetadataSource(NamedTuple):
-    """Sibling attributes whose runtime VALUES provide a parameter's min/max — the device's own
+    """Sibling attributes whose runtime VALUES provide a parameter's min/max/step — the device's own
     limit attributes (the ones we hide from the UI as metadata). Priority 1 in the resolver:
     runtime sibling value > spec table > wire-type default."""
 
     min_attr: int | None = None
     max_attr: int | None = None
+    step_attr: int | None = None
 
 
 METADATA_SOURCES: dict[AttributeKey, MetadataSource] = {
@@ -206,6 +268,7 @@ METADATA_SOURCES: dict[AttributeKey, MetadataSource] = {
     AttributeKey(0x201, 0x11): MetadataSource(0x05, 0x06),  # OccupiedCoolingSetpoint <- AbsMin/MaxCoolSetpointLimit
     AttributeKey(0x201, 0x12): MetadataSource(0x03, 0x04),  # OccupiedHeatingSetpoint <- AbsMin/MaxHeatSetpointLimit
     AttributeKey(0x300, 0x07): MetadataSource(0x400B, 0x400C),  # ColorTemperatureMireds <- physical min/max mireds
+    AttributeKey(0x056, 0x00): MetadataSource(0x01, 0x02, 0x03),  # TemperatureSetpoint <- Min/MaxTemperature, Step
 }
 
 

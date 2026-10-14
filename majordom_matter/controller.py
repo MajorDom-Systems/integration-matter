@@ -111,7 +111,7 @@ class MatterController(AbstractController):
         await self._matter_client.connect()
 
         init_ready = asyncio.Event()
-        self._background_tasks.append(asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready)))
+        self._background_tasks.append(asyncio.create_task(self._listen(init_ready)))
         await init_ready.wait()
 
         # Networks new devices get commissioned onto.
@@ -207,6 +207,16 @@ class MatterController(AbstractController):
             return
         await self._matter_client.disconnect()
         await self._matter_client_session.close()
+
+    async def _listen(self, init_ready: asyncio.Event):
+        """Listens to matter-server until stop() cancels it. The client doesn't reconnect, so when matter-server goes
+        away (e.g. its container is recreated) the hub restarts Matter instead."""
+        try:
+            await self._matter_client.start_listening(init_ready=init_ready)
+        except Exception as e:
+            logging.warning(f"[{self.name}] matter-server listener failed: {e!r}")
+        message = "Lost the connection to the Matter server."
+        await self.dependencies.output.controller_did_encounter_error(self, message, still_running=False)
 
     # -------------------------------------------------------------------------
     # Hub -> device operations

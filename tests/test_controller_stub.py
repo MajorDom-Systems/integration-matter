@@ -18,7 +18,7 @@ import pytest_asyncio
 from majordom_integration_sdk import Context, Endpoint, WifiCredentials
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
-from majordom_integration_sdk.testing import build_test_dependencies
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
 
 from majordom_matter import MatterController
 from majordom_matter.mapper import MatterMapper
@@ -498,3 +498,22 @@ async def test_a_device_that_never_finished_commissioning_unpairs(controller):
     )
     await controller.unpair(device)
     assert controller._matter_client.removed_nodes == []
+
+
+async def test_a_lost_matter_server_asks_the_hub_to_restart_matter(controller):
+    ctrl, output = controller
+    cast(FakeMatterClient, ctrl._matter_client).lose_server()
+    await _wait(lambda: bool(output.errors))
+    assert [still_running for _, still_running in output.errors] == [False]
+
+
+async def test_stopping_matter_reports_no_error(monkeypatch):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
+        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+    )
+    controller = MatterController(deps)
+    await controller.start()
+    await controller.stop()
+    await asyncio.sleep(0.1)
+    assert cast(RecordingControllerOutput, deps.output).errors == []

@@ -65,6 +65,7 @@ class FakeMatterClient:
         self.written_attributes: list[tuple[int, str, Any]] = []
         self.removed_nodes: list[int] = []
         self.networks: dict[str, Any] = {}  # credentials handed over for commissioning
+        self._server_gone = asyncio.Event()
 
     # --- lifecycle ---
     async def connect(self) -> None:
@@ -73,9 +74,9 @@ class FakeMatterClient:
     async def start_listening(self, init_ready: asyncio.Event | None = None) -> None:
         if init_ready is not None:
             init_ready.set()
-        # The real client runs its websocket loop forever; block until the controller's stop()
-        # cancels this task.
-        await asyncio.Event().wait()
+        # The real client runs its websocket loop until matter-server goes away (`lose_server()`);
+        # block until then or until the controller's stop() cancels this task.
+        await self._server_gone.wait()
 
     async def disconnect(self) -> None:
         return None
@@ -151,6 +152,10 @@ class FakeMatterClient:
         return unsubscribe
 
     # --- test helpers ---
+    def lose_server(self) -> None:
+        """Simulate matter-server going away (its container restarting): listening ends, as the real client's does."""
+        self._server_gone.set()
+
     def fire_attribute_update(self, attribute_path: str, value: Any) -> None:
         """Simulate the device pushing a new attribute value to its subscribers."""
         self._node.update_attribute(attribute_path, value)

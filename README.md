@@ -53,7 +53,7 @@ Google's Matter Virtual Devices in a dockerized matter-server (`tests/test_contr
 `majordom-matter` is a standalone library — import it into your own app, or run **just this
 integration** interactively (discover, pair, control, and inspect devices from a prompt) with no Hub.
 It needs a running [python-matter-server](https://github.com/home-assistant-libs/python-matter-server)
-reachable over its WebSocket (pass it as `links={"matter": Endpoint("matter", "ws", "ws://localhost:5580/ws")}`); Thread devices
+reachable over its WebSocket (`MATTER_SERVER_URL`, default `ws://localhost:5580/ws`); Thread devices
 also need an OpenThread Border Router.
 
 See **[Standalone mode](https://docs.majordom.io/device-integration/standalone)** for the interactive
@@ -67,21 +67,13 @@ CLI, watch mode, and the programmatic API.
   thermostats, covers, fans, appliances (verified against 30 Matter Virtual Device types).
 - **Credentials needed to pair:** `code` (manual pairing code) or `qr`.
 
-### Needs
+### Required harness
 
-| Capability | Required | Provided by |
-|------------|----------|-------------|
-| `matter/ws` | yes | the `matter-server` service below; standalone, any matter-server you run |
-| `ble` | no | the host's Bluetooth adapter. Semantic only: the controller reaches it through the hub's `BLEService` (SDK), which also serves matter-server's Bluetooth over `/ble` (`majordom_matter/ble_backend.py`) |
-| `ip` (for `matter-server`) | yes | the host |
-| `thread/otbr-rest` (for `matter-server`) | no | a Thread border router: the hub's `otbr` or `multiprotocol` service on a Thread-capable stick. Without one, Matter works over Wi-Fi and Ethernet |
-
-- **Services it brings:** `matter-server` (`majordom_matter/config.py`), which the hub runs while
-  Matter is in use.
-- **Settings:** none.
-- **Context:** the hub's Wi-Fi (`context.wifi`) and Thread network (`context.thread_dataset`), handed
-  to matter-server so new devices join them.
-- **OS / permissions:** BLE access (D-Bus) for commissioning; mDNS on the LAN for on-network discovery.
+- **Hardware adapters:** an 802.15.4 radio (e.g. a SkyConnect / Thread dongle) for Thread devices —
+  driven by matter-server / the OTBR, not this package directly.
+- **Third-party software services:** a **matter-server** instance reachable over WebSocket
+  (`MATTER_SERVER_URL`), and an **OpenThread Border Router (OTBR)** for Thread devices.
+- **OS / permissions:** BLE access for commissioning; mDNS on the LAN for on-network discovery.
 
 ### Protocol stack (OSI)
 

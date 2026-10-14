@@ -90,11 +90,16 @@ def test_ladder_harvested_ha_and_fallback():
 
 
 def test_every_main_parameter_is_user_visible():
-    from majordom_matter.matter_spec import EVERYDAY_COMMANDS, MAIN_PARAMETER_BY_CLUSTER
+    from majordom_matter.matter_spec import EVERYDAY_COMMANDS, MAIN_PARAMETER_BY_CLUSTER, STATE_TOGGLE_ATTRIBUTES
 
     for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
-        key = (cluster_id, spec.command_or_attribute_id)
-        assert key in EVERYDAY_COMMANDS or AttributeKey(*key) in EVERYDAY_CONTROL_ATTRIBUTES, hex(cluster_id)
+        while spec is not None:
+            key = (cluster_id, spec.command_or_attribute_id)
+            if spec.is_attribute:
+                assert AttributeKey(*key) in EVERYDAY_CONTROL_ATTRIBUTES | STATE_TOGGLE_ATTRIBUTES, hex(cluster_id)
+            else:
+                assert key in EVERYDAY_COMMANDS, hex(cluster_id)
+            spec = spec.fallback
 
 
 def test_unverified_command_mains_are_disabled():

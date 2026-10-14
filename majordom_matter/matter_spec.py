@@ -411,57 +411,88 @@ EVERYDAY_COMMANDS: set[tuple[int, int]] = {
 }
 
 
+# Read-only state attributes a main-parameter tap sets through a command: the attribute's
+# `default_value` is a two-value cycle, the Hub sends the next value, and the controller sends the
+# command for it. They are `control` (the Hub forwards commands for control parameters only).
+# A state outside the cycle taps to the cycle's first (lowest) value — the safer direction.
+STATE_TOGGLE_COMMANDS: dict[AttributeKey, dict[int, int]] = {
+    AttributeKey(0x101, 0x0): {1: 0x00, 2: 0x01},  # DoorLock.LockState Locked→LockDoor, Unlocked→UnlockDoor
+    AttributeKey(0x081, 0x4): {0: 0x01, 1: 0x00},  # Valve.CurrentState Closed→Close, Open→Open
+    AttributeKey(0x102, 0x8): {0: 0x00, 100: 0x01},  # WindowCovering.LiftPercentage 0→UpOrOpen, 100→DownOrClose
+    AttributeKey(0x506, 0x0): {0: 0x00, 1: 0x01},  # MediaPlayback.CurrentState Playing→Play, Paused→Pause
+    AttributeKey(0x061, 0x4): {1: 0x03, 2: 0x00},  # RvcOperationalState Running→Resume, Paused→Pause
+    AttributeKey(0x060, 0x4): {1: 0x03, 2: 0x00},  # OperationalState Running→Resume, Paused→Pause
+}
+# ClosureControl.MainState: a struct position can't cycle, so it's a one-value button and the
+# controller picks Stop / MoveTo from the current state (see MatterController._state_toggle_command).
+CLOSURE_MAIN_STATE = AttributeKey(0x104, 0x1)
+STATE_TOGGLE_ATTRIBUTES: set[AttributeKey] = {*STATE_TOGGLE_COMMANDS, CLOSURE_MAIN_STATE}
+
+
 # Arguments to send along with a main-parameter command/attribute when the parameter itself
 # doesn't carry an obvious "activate" value (e.g. a mode/setpoint command). None means the
-# command takes no arguments; an int means a raw attribute value (only used for the FanControl
-# case below, where command_or_attribute_id is actually an attribute id).
-DefaultParams = dict[str, Any] | int | None
+# command takes no arguments; for an attribute main parameter it's the `default_value`: an int is
+# a one-value button, a set a tap cycle.
+DefaultParams = dict[str, Any] | int | set[int] | None
 
 
 class MainParameterSpec(NamedTuple):
-    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: which command (or — for
-    FanControl specifically — attribute) makes a sensible main_parameter for that cluster,
-    and what default_params to send with it if the parameter has no obvious "activate"
-    value. Iteration order is priority order — the first cluster below that's present on
-    the device wins."""
+    """Value of MAIN_PARAMETER_BY_CLUSTER, keyed by cluster_id: which command (or, with
+    `is_attribute`, attribute) makes a sensible main_parameter for that cluster, and what
+    default_params to send with it if the parameter has no obvious "activate" value. Iteration
+    order is priority order — the first cluster below that's present on the device wins.
+    `fallback` is tried when the device lacks this one (an optional attribute or command)."""
 
     command_or_attribute_id: int
     default_params: DefaultParams
+    is_attribute: bool = False
+    fallback: "MainParameterSpec | None" = None
 
 
 MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000006: MainParameterSpec(0x00000002, None),  # OnOff.Toggle
     # Thermostat intentionally has NO one-tap: "raise or lower?" isn't a sensible tile action —
     # tapping a thermostat should open its screen, not nudge a setpoint blind.
-    0x00000202: MainParameterSpec(0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
+    0x00000202: MainParameterSpec(0x00000000, {0x00, 0x04}, is_attribute=True),  # FanControl.FanMode Off↔On
     0x00000056: MainParameterSpec(
         0x00000000,
         {"targetTemperature": 22},  # °C, see COMMAND_FIELD_SCALE
         # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are
         # feature-gated & mutually exclusive; targetTemperature covers the common "TN" case)
     ),
-    0x00000060: MainParameterSpec(0x00000002, None),  # OperationalState.Start
-    0x00000061: MainParameterSpec(0x00000003, None),  # RVCOperationalState.Resume
+    # OperationalState pauses/resumes a running cycle and never Starts one from idle (an oven or a
+    # microwave must not start in one tap); without Pause/Resume there's no main parameter.
+    0x00000060: MainParameterSpec(0x00000004, {1, 2}, is_attribute=True),  # OperationalState Running↔Paused
+    0x00000061: MainParameterSpec(
+        0x00000004,
+        {1, 2},
+        is_attribute=True,
+        fallback=MainParameterSpec(0x00000003, None),  # RVCOperationalState.Resume
+    ),  # RvcOperationalState Running↔Paused
     # Unverified: OperationalState.Start wins on a Microwave Oven anyway; to verify on real devices.
     # 0x0000005F: MainParameterSpec(0x00000001, {"timeToAdd": 30}),  # MicrowaveOvenControl.AddMoreTime
     0x00000050: MainParameterSpec(0x00000000, {"newMode": 0}),  # ModeSelect.ChangeToMode
-    0x00000101: MainParameterSpec(0x00000001, {"PINCode": None}),  # DoorLock.UnlockDoor
+    0x00000101: MainParameterSpec(0x00000000, {1, 2}, is_attribute=True),  # DoorLock.LockState Locked↔Unlocked
     # 0x0000005C: MainParameterSpec(0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
-    0x00000506: MainParameterSpec(0x00000000, None),  # MediaPlayback.Play
+    0x00000506: MainParameterSpec(
+        0x00000000,
+        {0, 1},
+        is_attribute=True,
+        fallback=MainParameterSpec(0x00000000, None),  # MediaPlayback.Play
+    ),  # MediaPlayback.CurrentState Playing↔Paused
     # Unverified: a raw remote-key sender, shadowed by OnOff/MediaPlayback; to verify on real devices.
     # 0x00000509: MainParameterSpec(0x00000000, {"keyCode": 0x44}),  # KeyPadInpud.SendKey.Play
     0x00000102: MainParameterSpec(
-        0x00000000,
-        None,
-        # WindowCovering.UpOrOpen — the everyday one-tap for a cover (open); StopMotion
-        # (0x02) only matters mid-motion, so it's not the primary action
-    ),
-    0x00000104: MainParameterSpec(
-        0x00000001,
-        {"position": 1},
-        # ClosureControl.MoveTo{position=MoveToFullyOpen} — open is the everyday one-tap;
-        # ClosureControl has no no-arg Open command (a latched closure may also need latch=False)
-    ),
+        0x00000008,
+        {0, 100},
+        is_attribute=True,
+        # WindowCovering.UpOrOpen — a cover without position awareness keeps the one-way open;
+        # StopMotion (0x02) only matters mid-motion, so it's not the primary action
+        fallback=MainParameterSpec(0x00000000, None),
+    ),  # WindowCovering.CurrentPositionLiftPercentage open↔closed
+    # ClosureControl.MainState, a one-value button (Moving): MoveTo FullyClosed unless closed,
+    # else FullyOpen; Stop while moving (see STATE_TOGGLE_ATTRIBUTES)
+    0x00000104: MainParameterSpec(0x00000001, 1, is_attribute=True),
     # Unverified: one-way (EnableCharging needs current limits) and stops a car charge; to verify on real devices.
     # 0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
     # Unverified: mode 0 is vendor-defined and may not exist; to verify on real devices.
@@ -471,7 +502,7 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     #     0x00000000, {"streamUsage": 0, "originatingEndpointID": 0}
     # ),  # WebRTCTransportProvider.SolicitOffer
     0x00000556: MainParameterSpec(0x00000000, None),  # Chime.PlayChimeSound
-    0x00000081: MainParameterSpec(0x00000000, None),  # ValveConfigurationAndControl.Open
+    0x00000081: MainParameterSpec(0x00000004, {0, 1}, is_attribute=True),  # Valve.CurrentState Closed↔Open
 }
 
 
@@ -490,7 +521,7 @@ def _our_attribute_ux() -> dict[AttributeKey, UxSpec]:
     out: dict[AttributeKey, UxSpec] = {}
     for key in USER_READINGS:
         out[key] = UxSpec(ParameterVisibility.user, ParameterRole.sensor)
-    for key in EVERYDAY_CONTROL_ATTRIBUTES:
+    for key in EVERYDAY_CONTROL_ATTRIBUTES | STATE_TOGGLE_ATTRIBUTES:
         out[key] = UxSpec(ParameterVisibility.user, ParameterRole.control)
     return out
 

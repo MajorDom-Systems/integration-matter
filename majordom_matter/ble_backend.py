@@ -7,21 +7,22 @@ BLE proxy protocol v1: https://github.com/matter-js/matterjs-server/blob/main/do
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType
+from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
 from majordom_integration_sdk.discovery import BLEConnection, BLEDiscoveryInfo, BLEMatcher, BLEService
 
 logger = logging.getLogger(__name__)
 
 _FRAME = struct.Struct(">BH")  # opcode, connection handle; the payload follows
 _WRITE, _NOTIFICATION = 0x01, 0x02
-_RECONNECT_SEC = 10
+_RECONNECT_SEC, _RECONNECT_MAX_SEC = 1, 10  # the first retry, then doubling up to the most
 
 
 class _Failure(Exception):
@@ -46,6 +47,15 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+@contextlib.contextmanager
+def _gatt(error: str) -> Iterator[None]:
+    """Answers a failing GATT operation as ``error``, however its source failed (bleak, aioesphomeapi, a lost link)."""
+    try:
+        yield
+    except Exception as e:
+        raise _Failure(error, str(e)) from e
+
+
 class MatterServerBLEBackend:
     """matter-server's Bluetooth backend: serves the hub's `BLEService`, with every adapter and ESPHome node lent to
     it, to matter-server over matter-server's BLE proxy protocol on ``/ble``. The direction is hub → matter-server:
@@ -63,28 +73,36 @@ class MatterServerBLEBackend:
 
     async def run(self):
         """Serves matter-server until cancelled, reconnecting whenever it goes away."""
+        delay = _RECONNECT_SEC
         while True:
             try:
                 async with self._session.ws_connect(self._url) as ws:
                     self._ws = ws
-                    await self._serve(ws)
-            except (ClientError, OSError, TimeoutError) as e:
-                logger.debug(f"matter-server's /ble endpoint {self._url}: {e}")
+                    if await self._serve(ws):
+                        delay = _RECONNECT_SEC
+                reason = "closed"
+            except Exception as e:  # whatever broke, matter-server must get the hub's Bluetooth back
+                reason = f"failed: {e!r}"
             finally:
                 await self._release()
-            await asyncio.sleep(_RECONNECT_SEC)
+            log = logger.warning if delay == _RECONNECT_SEC else logger.debug  # once per outage, not every retry
+            log(f"matter-server's /ble endpoint {self._url} {reason}, reconnecting in {delay} s")
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _RECONNECT_MAX_SEC)
 
-    async def _serve(self, ws: ClientWebSocketResponse):
+    async def _serve(self, ws: ClientWebSocketResponse) -> bool:
+        """Serves one connection until it closes; False when matter-server refuses it."""
         await ws.send_json({"type": "hello", "version": 1})
         if error := (await ws.receive_json(timeout=10)).get("error"):
             logger.warning(f"matter-server refused the hub's Bluetooth: {error}")
-            return
+            return False
         logger.info(f"Lending Bluetooth to matter-server at {self._url}")
         async for message in ws:
             if message.type == WSMsgType.TEXT:
                 self._spawn(self._answer(ws, json.loads(message.data)))
             elif message.type == WSMsgType.BINARY:
                 await self._forward(message.data)  # in order: these are segments of one stream
+        return True
 
     async def _answer(self, ws: ClientWebSocketResponse, command: dict):
         try:
@@ -102,7 +120,12 @@ class MatterServerBLEBackend:
         opcode, handle = _FRAME.unpack_from(frame)
         peripheral = self._peripherals.get(handle)
         if opcode == _WRITE and peripheral and peripheral.write_handle is not None:
-            await peripheral.connection.write(peripheral.write_handle, frame[_FRAME.size :], response=True)
+            try:
+                await peripheral.connection.write(peripheral.write_handle, frame[_FRAME.size :], response=True)
+            except Exception as e:  # a BTP segment is no request to fail, and BTP can't skip one: end the connection
+                logger.warning(f"Bluetooth write on connection {handle} failed, disconnecting: {e!r}")
+                self._lost(handle)
+                self._spawn(peripheral.connection.disconnect())
 
     def _peripheral(self, connection_handle: int) -> _Peripheral:
         if peripheral := self._peripherals.get(connection_handle):
@@ -145,12 +168,15 @@ class MatterServerBLEBackend:
         await peripheral.connection.disconnect()
 
     async def _discover_services(self, connection_handle: int):
-        services = await self._peripheral(connection_handle).connection.services()
+        peripheral = self._peripheral(connection_handle)
+        with _gatt("discovery_failed"):
+            services = await peripheral.connection.services()
         return {"services": [{"uuid": s.uuid} for s in services]}
 
     async def _discover_characteristics(self, connection_handle: int, service_uuid: str):
         peripheral = self._peripheral(connection_handle)
-        services = await peripheral.connection.services()
+        with _gatt("discovery_failed"):
+            services = await peripheral.connection.services()
         service = next((s for s in services if _uuid(s.uuid) == _uuid(service_uuid)), None)
         if not service:
             raise _Failure("service_not_found", service_uuid)
@@ -161,18 +187,21 @@ class MatterServerBLEBackend:
 
     async def _read_characteristic(self, connection_handle: int, characteristic_uuid: str):
         peripheral, handle = self._characteristic(connection_handle, characteristic_uuid)
-        return {"value": _b64(await peripheral.connection.read(handle))}
+        with _gatt("read_failed"):
+            return {"value": _b64(await peripheral.connection.read(handle))}
 
     async def _write_characteristic(
         self, connection_handle: int, characteristic_uuid: str, value: str, response: bool = False
     ):
         peripheral, handle = self._characteristic(connection_handle, characteristic_uuid)
         peripheral.write_handle = handle
-        await peripheral.connection.write(handle, base64.b64decode(value), response)
+        with _gatt("write_failed"):
+            await peripheral.connection.write(handle, base64.b64decode(value), response)
 
     async def _subscribe_characteristic(self, connection_handle: int, characteristic_uuid: str):
         peripheral, handle = self._characteristic(connection_handle, characteristic_uuid)
-        await peripheral.connection.start_notify(handle, lambda data: self._notify(connection_handle, data))
+        with _gatt("subscribe_failed"):
+            await peripheral.connection.start_notify(handle, lambda data: self._notify(connection_handle, data))
 
     async def _write_and_subscribe(
         self,

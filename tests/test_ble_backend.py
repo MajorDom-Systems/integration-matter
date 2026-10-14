@@ -15,6 +15,10 @@ C1, C2 = "18ee2ef5-263d-4559-959f-4f9c429f9d11", "18ee2ef5-263d-4559-959f-4f9c42
 FRAME = struct.Struct(">BH")
 
 
+class GattError(Exception):
+    """What bleak's BleakError and aioesphomeapi's APIConnectionError have in common: not an OSError."""
+
+
 class FakeConnection:
     mtu = 247
 
@@ -22,6 +26,7 @@ class FakeConnection:
         self.writes: list[tuple[int, bytes, bool]] = []
         self.notify = None
         self.disconnected = False
+        self.error: Exception | None = None  # raised by writes
 
     async def services(self):
         characteristics = (GattCharacteristic(C1, 3, ("write",)), GattCharacteristic(C2, 5, ("indicate",)))
@@ -31,6 +36,8 @@ class FakeConnection:
         return b""
 
     async def write(self, handle, data, response=True):
+        if self.error:
+            raise self.error
         self.writes.append((handle, data, response))
 
     async def start_notify(self, handle, callback):
@@ -132,3 +139,30 @@ async def test_failures_are_answered_with_protocol_errors(backend):
     assert (await command(ws, 0, "connect", address="CC:DD"))["error"] == "connection_failed"
     assert (await command(ws, 1, "discover_services", connection_handle=9))["error"] == "not_connected"
     assert (await command(ws, 2, "reboot"))["error"] == "internal_error"
+
+
+async def test_a_failed_write_is_answered_and_the_backend_keeps_serving(backend):
+    ws, radio = backend
+    connection = radio.connection
+    assert (await command(ws, 0, "connect", address="AA:BB"))["success"]
+    assert (await command(ws, 1, "discover_characteristics", connection_handle=1, service_uuid=MATTER))["success"]
+    connection.error = GattError("link lost")
+
+    reply = await command(ws, 2, "write_characteristic", connection_handle=1, characteristic_uuid=C1, value="aHM=")
+    assert reply["error"] == "write_failed"
+
+    # a BTP segment is no request: its failure ends the connection, which matter-server is told about
+    await ws.send_bytes(FRAME.pack(0x01, 1) + b"segment")
+    assert await ws.receive_json(timeout=5) == {"event": "disconnected", "data": {"connection_handle": 1}}
+    assert connection.disconnected
+
+    connection.error = None
+    assert (await command(ws, 3, "connect", address="AA:BB"))["result"] == {"connection_handle": 2, "mtu": 247}
+
+
+async def test_a_dropped_websocket_reconnects(backend, matter_server):
+    ws, _ = backend
+    _, backends = matter_server
+    await ws.close()
+    ws = await asyncio.wait_for(backends.get(), 5)
+    assert await ws.receive_json(timeout=5) == {"type": "hello", "version": 1}

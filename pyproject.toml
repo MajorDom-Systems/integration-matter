@@ -2,7 +2,11 @@
 name = "majordom-matter"
 version = "0.1.4"
 description = "Matter integration for MajorDom — bridges Matter devices into the MajorDom language."
-authors = [{ name = "Mark Parker", email = "mark@parker-programs.com" }]
+authors = [
+    { name = "Parker Industries" },
+    { name = "Ehor Lukianov @Hexa-Hexagon", email = "85293779+Hexa-Hexagon@users.noreply.github.com" },
+    { name = "Mark Parker @MarkParker5", email = "34688010+MarkParker5@users.noreply.github.com" },
+]
 readme = "README.md"
 license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
@@ -28,6 +32,7 @@ Documentation = "https://docs.majordom.io/device-integration"
 Repository = "https://github.com/MajorDom-Systems/integration-matter"
 Issues = "https://github.com/MajorDom-Systems/integration-matter/issues"
 "Commercial licensing" = "https://parker-industries.org/partnership"
+"Parker Industries" = "https://parker-industries.org"
 
 [dependency-groups]
 dev = [

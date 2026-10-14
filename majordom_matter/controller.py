@@ -74,6 +74,9 @@ class MatterController(AbstractController):
     # via the shared BLE scanner instead.
     _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
+    _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
+    _RECONNECT_DELAY_MAX = 30.0
+
     def __init__(self, dependencies: AbstractController.Dependencies):
         super().__init__(dependencies)
         # Instance state (not class-level): the mapper is wired with the framework's UUID
@@ -107,24 +110,7 @@ class MatterController(AbstractController):
         self._background_tasks: list[asyncio.Task] = []
         self._node_availability: dict[UUID, bool] = {}
         self._matter_client_session = ClientSession()
-        self._matter_client = MatterClient(self.dependencies.links["matter"].url, self._matter_client_session)
-        await self._matter_client.connect()
-
-        init_ready = asyncio.Event()
-        listener = asyncio.create_task(self._listen(init_ready))
-        self._background_tasks.append(listener)
-        ready = asyncio.create_task(init_ready.wait())
-        await asyncio.wait({ready, listener}, return_when=asyncio.FIRST_COMPLETED)
-        ready.cancel()
-        if not init_ready.is_set():
-            raise MatterConnectionError("matter-server went away before it was ready")
-
-        # Networks new devices get commissioned onto.
-        if wifi := self.dependencies.context.wifi:
-            await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
-        if dataset := self.dependencies.context.thread_dataset:
-            await self._matter_client.set_thread_operational_dataset(dataset)
-
+        listener = await self._connect()
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
         # matter-server commissions over Bluetooth through the hub's radios, not its own
@@ -138,6 +124,17 @@ class MatterController(AbstractController):
         # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.
         self._ble_addresses: dict[UUID, set[str]] = {}  # discovery_id -> live BLE addresses
         self._ble_cancel = self.dependencies.ble_discovery_service.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
+
+        await self._sync_with_server()
+        self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
+
+    async def _sync_with_server(self):
+        """Hands matter-server the networks and follows the devices on its fabric; on every (re)connect."""
+        # Networks new devices get commissioned onto.
+        if wifi := self.dependencies.context.wifi:
+            await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
+        if dataset := self.dependencies.context.thread_dataset:
+            await self._matter_client.set_thread_operational_dataset(dataset)
 
         device_nodes: list[int] = []
         nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
@@ -213,16 +210,57 @@ class MatterController(AbstractController):
         await self._matter_client.disconnect()
         await self._matter_client_session.close()
 
-    async def _listen(self, init_ready: asyncio.Event):
-        """Listens to matter-server until stop() cancels it. The client doesn't reconnect, so when matter-server goes
-        away (e.g. its container is recreated) the hub restarts Matter instead."""
+    async def _connect(self) -> asyncio.Task:
+        """Connects a fresh client to matter-server; the returned listener runs until matter-server goes away."""
+        self._matter_client = MatterClient(self.dependencies.links["matter"].url, self._matter_client_session)
+        await self._matter_client.connect()
+
+        init_ready = asyncio.Event()
+        listener = asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready))
+        ready = asyncio.create_task(init_ready.wait())
         try:
-            await self._matter_client.start_listening(init_ready=init_ready)
-        except Exception as e:
-            logging.warning(f"[{self.name}] matter-server listener failed: {e!r}")
-        if init_ready.is_set():  # before that, start() fails instead
-            message = "Lost the connection to the Matter server."
-            await self.dependencies.output.controller_did_encounter_error(self, message, still_running=False)
+            await asyncio.wait({ready, listener}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            ready.cancel()
+            if not init_ready.is_set():
+                listener.cancel()
+        if not init_ready.is_set():
+            raise MatterConnectionError("matter-server went away before it was ready")
+        return listener
+
+    async def _stay_connected(self, listener: asyncio.Task):
+        """Reconnects whenever matter-server goes away (e.g. its container is recreated) until stop() cancels it,
+        so the integration heals by itself instead of being restarted by the hub."""
+        try:
+            while True:
+                try:
+                    await listener
+                except Exception as e:
+                    logging.warning(f"[{self.name}] matter-server listener failed: {e!r}")
+                message = "Lost the connection to the Matter server, reconnecting."
+                await self.dependencies.output.controller_did_encounter_error(self, message, still_running=True)
+                for device_id, available in self._node_availability.items():
+                    if available:
+                        await self.dependencies.output.controller_did_lose_device(self, device_id)
+                self._node_availability = dict.fromkeys(self._node_availability, False)
+
+                delay = self._RECONNECT_DELAY
+                while True:
+                    await asyncio.sleep(delay)
+                    try:
+                        listener = await self._connect()
+                        await self._sync_with_server()
+                        break
+                    except Exception as e:
+                        listener.cancel()
+                        logging.info(f"[{self.name}] matter-server is not back yet: {e!r}")
+                        delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
+                logging.info(f"[{self.name}] reconnected to matter-server")
+                for device_id, available in self._node_availability.items():
+                    if available:
+                        await self.dependencies.output.controller_did_connect_device(self, device_id)
+        finally:
+            listener.cancel()
 
     # -------------------------------------------------------------------------
     # Hub -> device operations

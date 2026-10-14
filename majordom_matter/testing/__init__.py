@@ -11,6 +11,9 @@ plain CI without docker. The heavy, real-device coverage stays in the dockerized
 
     from majordom_matter.testing import FakeMatterClient
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+
+To have the controller reconnect to the same fabric, share one `FakeMatterServer` between its clients:
+`partial(FakeMatterClient, server=FakeMatterServer())`.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from matter_server.client.exceptions import CannotConnect
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import NodeNotExists
 from matter_server.common.helpers.util import dataclass_from_dict
@@ -45,6 +49,25 @@ class _Subscription:
         self.attr_path_filter = attr_path_filter
 
 
+class FakeMatterServer:
+    """matter-server's side of the fake: the fabric (the canned node) and whether the server is up."""
+
+    def __init__(self, node: MatterNode | None = None):
+        self.node = node if node is not None else load_on_off_light_node()
+        self.commissioned = False
+        self.up = True
+        self.gone = asyncio.Event()  # set when this run of the server goes away
+
+    def lose(self) -> None:
+        """Go away, like its container restarting: listening clients end, new ones can't connect."""
+        self.up = False
+        self.gone.set()
+
+    def restore(self) -> None:
+        self.up = True
+        self.gone = asyncio.Event()
+
+
 class FakeMatterClient:
     """Drop-in for `matter_server.client.MatterClient`, backed by one canned node.
 
@@ -55,21 +78,30 @@ class FakeMatterClient:
     `removed_nodes`) and `fire_attribute_update()` lets a test simulate a device-side change.
     """
 
-    def __init__(self, url: str | None = None, session: Any = None, *, node: MatterNode | None = None):
+    def __init__(
+        self,
+        url: str | None = None,
+        session: Any = None,
+        *,
+        node: MatterNode | None = None,
+        server: FakeMatterServer | None = None,
+    ):
         self._url = url
         self._session = session
-        self._node = node if node is not None else load_on_off_light_node()
-        self._commissioned = False
+        self.server = server if server is not None else FakeMatterServer(node)
+        self._node = self.server.node
         self._subscriptions: list[_Subscription] = []
         self.sent_commands: list[tuple[int, int, Any]] = []
         self.written_attributes: list[tuple[int, str, Any]] = []
         self.removed_nodes: list[int] = []
         self.networks: dict[str, Any] = {}  # credentials handed over for commissioning
-        self._server_gone = asyncio.Event()
+        self._server_gone = self.server.gone
 
     # --- lifecycle ---
     async def connect(self) -> None:
-        return None
+        if not self.server.up:
+            raise CannotConnect(ConnectionRefusedError("matter-server is down"))
+        self._server_gone = self.server.gone
 
     async def start_listening(self, init_ready: asyncio.Event | None = None) -> None:
         if init_ready is not None:
@@ -89,23 +121,23 @@ class FakeMatterClient:
 
     # --- nodes ---
     def get_nodes(self) -> list[MatterNode]:
-        return [self._node] if self._commissioned else []
+        return [self._node] if self.server.commissioned else []
 
     def get_node(self, node_id: int) -> MatterNode:
-        if self._commissioned and node_id == self._node.node_id:
+        if self.server.commissioned and node_id == self._node.node_id:
             return self._node
         raise NodeNotExists(f"Node {node_id} does not exist or is not yet interviewed")  # as the real client
 
     async def remove_node(self, node_id: int) -> None:
-        if not (self._commissioned and node_id == self._node.node_id):
+        if not (self.server.commissioned and node_id == self._node.node_id):
             raise NodeNotExists(f"Node {node_id} does not exist")  # as matter-server answers
         self.removed_nodes.append(node_id)
         if node_id == self._node.node_id:
-            self._commissioned = False
+            self.server.commissioned = False
 
     # --- discovery ---
     async def discover_commissionable_nodes(self) -> list[CommissionableNodeData]:
-        if self._commissioned:
+        if self.server.commissioned:
             return []
         info = self._node.device_info
         return [
@@ -121,11 +153,11 @@ class FakeMatterClient:
 
     # --- commissioning ---
     async def commission_with_code(self, code: str, network_only: bool = False) -> MatterNodeData:
-        self._commissioned = True
+        self.server.commissioned = True
         return self._node.node_data
 
     async def commission_on_network(self, setup_pin_code: int, *args: Any, **kwargs: Any) -> MatterNodeData:
-        self._commissioned = True
+        self.server.commissioned = True
         return self._node.node_data
 
     # --- commands / attributes ---
@@ -154,7 +186,7 @@ class FakeMatterClient:
     # --- test helpers ---
     def lose_server(self) -> None:
         """Simulate matter-server going away (its container restarting): listening ends, as the real client's does."""
-        self._server_gone.set()
+        self.server.lose()
 
     def fire_attribute_update(self, attribute_path: str, value: Any) -> None:
         """Simulate the device pushing a new attribute value to its subscribers."""
@@ -172,4 +204,4 @@ class FakeMatterClient:
             sub.callback(event_type, value)
 
 
-__all__ = ["FakeMatterClient", "load_on_off_light_node"]
+__all__ = ["FakeMatterClient", "FakeMatterServer", "load_on_off_light_node"]

@@ -8,6 +8,7 @@ in the dockerized MVD suite, test_controller.py.
 
 import asyncio
 import tempfile
+from functools import partial
 from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock
@@ -24,7 +25,7 @@ from majordom_matter import MatterController
 from majordom_matter.exceptions import MatterConnectionError
 from majordom_matter.mapper import MatterMapper
 from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
-from majordom_matter.testing import FakeMatterClient
+from majordom_matter.testing import FakeMatterClient, FakeMatterServer
 
 FAKE_NODE_ID = 46  # matches fixtures/on_off_light_node.json
 
@@ -32,7 +33,8 @@ FAKE_NODE_ID = 46  # matches fixtures/on_off_light_node.json
 @pytest_asyncio.fixture
 async def controller(monkeypatch):
     """A started MatterController whose matter-server client is the in-process fake."""
-    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=FakeMatterServer()))
+    monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter")
     deps = deps.copy(links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")})
     controller = MatterController(deps)
@@ -501,11 +503,38 @@ async def test_a_device_that_never_finished_commissioning_unpairs(controller):
     assert controller._matter_client.removed_nodes == []
 
 
-async def test_a_lost_matter_server_asks_the_hub_to_restart_matter(controller):
+async def test_matter_reconnects_once_a_lost_matter_server_is_back(controller):
     ctrl, output = controller
-    cast(FakeMatterClient, ctrl._matter_client).lose_server()
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    output.connected_devices.clear()
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost.lose_server()
+    await _wait(lambda: output.lost_devices == [device_id])
+    await asyncio.sleep(0.1)  # a few failed attempts
+    lost.server.restore()
+    await _wait(lambda: output.connected_devices == [device_id])
+    assert [still_running for _, still_running in output.errors] == [True]
+
+    output.events.clear()
+    cast(FakeMatterClient, ctrl._matter_client).fire_attribute_update("13/6/0", True)
+    await _wait(lambda: bool(output.events))  # subscribed again on the new connection
+
+
+async def test_stopping_matter_while_it_reconnects(monkeypatch):
+    server = FakeMatterServer()
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
+    monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
+    deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
+        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+    )
+    controller = MatterController(deps)
+    await controller.start()
+    server.lose()
+    output = cast(RecordingControllerOutput, deps.output)
     await _wait(lambda: bool(output.errors))
-    assert [still_running for _, still_running in output.errors] == [False]
+    await asyncio.sleep(0.1)  # a few failed attempts
+    await asyncio.wait_for(controller.stop(), 2)
+    assert [still_running for _, still_running in output.errors] == [True]
 
 
 async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypatch):

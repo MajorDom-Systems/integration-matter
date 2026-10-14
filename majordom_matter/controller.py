@@ -18,7 +18,7 @@ from majordom_integration_sdk.schemas.parameter import ParameterDataType, Parame
 from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
-from matter_server.common.models import CommissionableNodeData, EventType
+from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
 from majordom_matter.config import matter_server_url
 
@@ -184,6 +184,32 @@ class MatterController(AbstractController):
     # Hub -> device operations
     # -------------------------------------------------------------------------
 
+    async def _commission(self, value: str, network_only: bool) -> MatterNodeData:
+        """Route by what the user typed, whichever credentials type the UI collected it under.
+
+        `MT:` is a QR payload; 11 or 21 digits are a manual pairing code; 8 digits are the raw
+        setup PIN, which only commission_on_network takes and which carries no discriminator
+        for finding a BLE-only device.
+        """
+        if value.strip().upper().startswith("MT:"):
+            return await self._matter_client.commission_with_code(value.strip(), network_only=network_only)
+        digits = "".join(char for char in value if char.isdigit())
+        match len(digits):
+            case 8:
+                if not network_only:
+                    raise ValueError(
+                        "A raw 8-digit setup PIN only works for devices already on the network; "
+                        "enter the 11-digit manual pairing code or scan the QR code for a Bluetooth device"
+                    )
+                return await self._matter_client.commission_on_network(int(digits))
+            case 11 | 21:
+                return await self._matter_client.commission_with_code(digits, network_only=network_only)
+            case _:
+                raise ValueError(
+                    f"Unrecognised Matter pairing code ({len(digits)} digits): expected an 11- or 21-digit "
+                    "manual pairing code, an 8-digit setup PIN, or an MT: QR payload"
+                )
+
     async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None):
         self._require_matter_client()
 
@@ -206,17 +232,9 @@ class MatterController(AbstractController):
         # schema layer that resolved CredentialsType via a different import path, yielding a
         # distinct enum class where `is` would never match. `==` on a str-enum compares the
         # underlying value and is robust to that (and semantically what we want anyway).
-        if credentials.type == CredentialsType.qr:
-            commission_node = await self._matter_client.commission_with_code(
-                str(credentials.value), network_only=network_only
-            )
-        elif credentials.type == CredentialsType.code:
-            # The user enters the 11-digit manual pairing code, not the raw setup PIN that
-            # commission_on_network expects, so every code goes through commission_with_code.
-            manual_code = str(credentials.value).replace("-", "").replace(" ", "")
-            commission_node = await self._matter_client.commission_with_code(manual_code, network_only=network_only)
-        else:
+        if credentials.type not in (CredentialsType.qr, CredentialsType.code):
             raise MatterUnexpectedError("This credentials type is not supported")
+        commission_node = await self._commission(str(credentials.value), network_only=network_only)
 
         self._majordom_descoveries.pop(discovery.id)
         node = self._matter_client.get_node(commission_node.node_id)

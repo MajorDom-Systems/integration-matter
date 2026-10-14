@@ -2,7 +2,7 @@
 
 The hub talks to a **Matter controller server** over its WebSocket API (`ws://<host>:5580/ws`)
 via `matter_server.client.MatterClient`, at the URL of its `matter` link. `config.py` declares
-that server as a service the hub runs, with Thread as an optional need. The server owns the Matter fabric, the Thread/BLE radios, and commissioning; the
+that server as a service the hub runs, with Thread as an optional need. The server owns the Matter fabric and commissioning, with no radio of its own: `ble_backend.py` serves it the hub's Bluetooth, and Thread goes through a border router; the
 hub discovers, commissions, and controls devices through it.
 
 ## Files
@@ -10,6 +10,7 @@ hub discovers, commissions, and controls devices through it.
 | File | Responsibility |
 |---|---|
 | `controller.py` | `AbstractController` implementation — lifecycle, commissioning, control, and the mDNS + BLE discovery/subscription paths |
+| `ble_backend.py` | `MatterServerBLEBackend`, matter-server's Bluetooth backend: serves the hub's `BLEService` (every adapter and ESPHome node) to matter-server over its BLE proxy protocol on `/ble` |
 | `mapper.py` | Matter ↔ MajorDom conversions: UUIDs (via the framework helpers), node/cluster → parameter parsing, data-type/unit/scale mapping, credentials options |
 | `model.py` | Typed `integration_data` schemas (`MatterDevice`, `MatterParameter`, …) |
 | `matter_spec.py` | Static spec metadata: system clusters/attributes, units/steps/scale, and the main-parameter map |

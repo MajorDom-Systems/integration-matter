@@ -8,7 +8,7 @@ from aiohttp import ClientSession, web
 from majordom_integration_sdk.discovery import BLEService, GattCharacteristic, GattService
 from majordom_integration_sdk.testing import FakeBLESource
 
-from majordom_matter.ble_proxy import MatterBLEProxy
+from majordom_matter.ble_backend import MatterServerBLEBackend
 
 MATTER = "0000fff6-0000-1000-8000-00805f9b34fb"
 C1, C2 = "18ee2ef5-263d-4559-959f-4f9c429f9d11", "18ee2ef5-263d-4559-959f-4f9c429f9d12"
@@ -44,14 +44,14 @@ class FakeConnection:
 
 @pytest.fixture
 async def matter_server():
-    """A stand-in for matter-server's /ble endpoint; yields its URL and the proxies that connect."""
-    proxies: asyncio.Queue[web.WebSocketResponse] = asyncio.Queue()
+    """A stand-in for matter-server's /ble endpoint; yields its URL and the backends that connect."""
+    backends: asyncio.Queue[web.WebSocketResponse] = asyncio.Queue()
     done = asyncio.Event()
 
     async def ble(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        await proxies.put(ws)
+        await backends.put(ws)
         await done.wait()
         return ws
 
@@ -61,20 +61,20 @@ async def matter_server():
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
-    yield f"http://127.0.0.1:{runner.addresses[0][1]}/ble", proxies
+    yield f"http://127.0.0.1:{runner.addresses[0][1]}/ble", backends
     done.set()
     await runner.cleanup()
 
 
 @pytest.fixture
-async def proxied(matter_server):
-    url, proxies = matter_server
+async def backend(matter_server):
+    url, backends = matter_server
     radio = FakeBLESource("hci0", connection=FakeConnection())
     ble = BLEService(sources=[radio])
     await ble.start()
     async with ClientSession() as session:
-        task = asyncio.create_task(MatterBLEProxy(url, ble, session).run())
-        ws = await asyncio.wait_for(proxies.get(), 5)
+        task = asyncio.create_task(MatterServerBLEBackend(url, ble, session).run())
+        ws = await asyncio.wait_for(backends.get(), 5)
         assert await ws.receive_json() == {"type": "hello", "version": 1}
         await ws.send_json({"type": "hello_response", "version": 1})
         yield ws, radio
@@ -87,8 +87,8 @@ async def command(ws, id: int, name: str, **args) -> dict:
     return await ws.receive_json(timeout=5)
 
 
-async def test_commissioning_runs_through_the_hub_radio(proxied):
-    ws, radio = proxied
+async def test_commissioning_runs_through_the_hub_radio(backend):
+    ws, radio = backend
     radio.advertise("AA:BB", service_data={MATTER: bytes(8)})
     await asyncio.sleep(0)
 
@@ -125,8 +125,8 @@ async def test_commissioning_runs_through_the_hub_radio(proxied):
     assert connection.disconnected
 
 
-async def test_failures_are_answered_with_protocol_errors(proxied):
-    ws, radio = proxied
+async def test_failures_are_answered_with_protocol_errors(backend):
+    ws, radio = backend
     radio.connection = None
 
     assert (await command(ws, 0, "connect", address="CC:DD"))["error"] == "connection_failed"

@@ -1,7 +1,7 @@
 """Lends the hub's Bluetooth to matter-server, so commissioning reaches devices through every radio
-`BLEService` hears with — local adapters and proxies alike.
+`BLEService` hears with — local adapters and ESPHome nodes alike.
 
-matter-server (``BLE_PROXY=true``) accepts Bluetooth proxies on ``/ble`` and drives them with the
+matter-server (``BLE_PROXY=true``) takes a Bluetooth client on ``/ble`` and drives it with the
 BLE proxy protocol v1: https://github.com/matter-js/matterjs-server/blob/main/docs/ble-proxy-protocol.md
 """
 
@@ -46,7 +46,13 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
-class MatterBLEProxy:
+class MatterServerBLEBackend:
+    """matter-server's Bluetooth backend: serves the hub's `BLEService`, with every adapter and ESPHome node lent to
+    it, to matter-server over matter-server's BLE proxy protocol on ``/ble``. The direction is hub → matter-server:
+    matter-server has no radio of its own, so its scans, connections and GATT traffic (BTP during commissioning) all
+    run through this client, which reconnects whenever matter-server goes away. Run one per matter-server.
+    """
+
     def __init__(self, url: str, ble: BLEService, session: ClientSession):
         self._url, self._ble, self._session = url, ble, session
         self._ws: ClientWebSocketResponse | None = None
@@ -63,7 +69,7 @@ class MatterBLEProxy:
                     self._ws = ws
                     await self._serve(ws)
             except (ClientError, OSError, TimeoutError) as e:
-                logger.debug(f"matter-server Bluetooth proxy endpoint {self._url}: {e}")
+                logger.debug(f"matter-server's /ble endpoint {self._url}: {e}")
             finally:
                 await self._release()
             await asyncio.sleep(_RECONNECT_SEC)
@@ -71,7 +77,7 @@ class MatterBLEProxy:
     async def _serve(self, ws: ClientWebSocketResponse):
         await ws.send_json({"type": "hello", "version": 1})
         if error := (await ws.receive_json(timeout=10)).get("error"):
-            logger.warning(f"matter-server refused the Bluetooth proxy: {error}")
+            logger.warning(f"matter-server refused the hub's Bluetooth: {error}")
             return
         logger.info(f"Lending Bluetooth to matter-server at {self._url}")
         async for message in ws:
@@ -232,4 +238,4 @@ class MatterBLEProxy:
     def _on_task_done(self, task: asyncio.Task):
         self._tasks.discard(task)
         if not task.cancelled() and (e := task.exception()):
-            logger.debug(f"Bluetooth proxy task failed: {e!r}")
+            logger.debug(f"Bluetooth backend task failed: {e!r}")

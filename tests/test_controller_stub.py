@@ -9,14 +9,17 @@ in the dockerized MVD suite, test_controller.py.
 import asyncio
 import tempfile
 from pathlib import Path
-from uuid import UUID
+from unittest.mock import AsyncMock
+from uuid import UUID, uuid4
 
+import pytest
 import pytest_asyncio
 from majordom_integration_sdk.schemas.command import DeviceCommand
-from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
+from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import build_test_dependencies
 
 from majordom_matter import MatterController
+from majordom_matter.mapper import MatterMapper
 from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
 from majordom_matter.testing import FakeMatterClient
 
@@ -44,6 +47,12 @@ async def _commission(controller, repository) -> UUID:
     """Seed the provisional row the Hub would create, then pair — returns the real device id."""
     await _wait(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
+    await _pair(controller, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    return controller.dependencies.output.connected_devices[-1]
+
+
+async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials) -> None:
+    repository = controller.dependencies.make_device_repository
     async with repository() as repo:
         await repo.save(
             MatterDeviceState(
@@ -57,8 +66,7 @@ async def _commission(controller, repository) -> UUID:
                 integration_data=MatterDeviceIntegrationData(node_id=0),
             )
         )
-    await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    return controller.dependencies.output.connected_devices[-1]
+    await controller.pair_device(discovery, credentials)
 
 
 async def test_discovers_the_canned_node(controller):
@@ -220,3 +228,115 @@ async def test_struct_command_main_parameter_taps_its_default_arguments(controll
     tap = param.main_cycle[0]
     await ctrl.send_command(DeviceCommand(device_id=device_id, parameter_id=param.id, value=tap), device, param)
     assert ctrl._matter_client.sent_commands[-1][2] == LevelControl.Commands.MoveToLevel(level=uint(9))
+
+
+async def _discovery_over(ctrl, transport: str) -> Discovery:
+    """The canned node's discovery re-advertised over `transport`, offering both code and QR."""
+    await _wait(lambda: bool(ctrl.discoveries))
+    discovery = next(iter(ctrl.discoveries.values())).model_copy(
+        update={"transport": transport, "expected_credentials_options": [CredentialsType.code, CredentialsType.qr]}
+    )
+    ctrl._majordom_descoveries[discovery.id] = discovery
+    return discovery
+
+
+def _spy_commissioning(ctrl) -> tuple[AsyncMock, AsyncMock]:
+    client = ctrl._matter_client
+    client.commission_with_code = AsyncMock(wraps=client.commission_with_code)
+    client.commission_on_network = AsyncMock(wraps=client.commission_on_network)
+    return client.commission_with_code, client.commission_on_network
+
+
+async def test_qr_on_network_discovery_commissions_network_only(controller):
+    # matter-server runs without a Bluetooth adapter in production; a non-network_only QR
+    # commission fails there with "Bluetooth commissioning is not available".
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "IP")
+    with_code, _on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.qr, value="MT:Y.K9042C00KA0648G00"))
+    with_code.assert_awaited_once_with("MT:Y.K9042C00KA0648G00", network_only=True)
+
+
+async def test_qr_on_ble_discovery_keeps_ble_commissioning(controller):
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "BLE")
+    with_code, _on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.qr, value="MT:Y.K9042C00KA0648G00"))
+    with_code.assert_awaited_once()
+    assert with_code.await_args is not None and with_code.await_args.kwargs.get("network_only", False) is False
+
+
+async def test_code_on_network_discovery_commissions_manual_code_network_only(controller):
+    # commission_on_network takes the raw setup PIN, not the 11-digit manual pairing code.
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "IP")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value="3497-011-2332"))
+    with_code.assert_awaited_once_with("34970112332", network_only=True)
+    on_network.assert_not_awaited()
+
+
+@pytest.mark.parametrize(("pairing_hint", "is_on_network"), [(None, True), (0x0002, False)])
+def test_code_option_offers_the_matter_manual_code_mask(pairing_hint: int | None, is_on_network: bool):
+    mapper = MatterMapper(lambda s: uuid4(), lambda d, s: uuid4())
+    options = mapper.define_credentials_options(1, pairing_hint, is_on_network=is_on_network)
+    assert options == [CredentialsType.code]
+    assert options[0].code_mask == "DDDD-DDD-DDDD"
+
+
+async def test_raw_setup_pin_on_network_discovery_commissions_on_network(controller):
+    # 8 digits is the raw setup PIN, which only commission_on_network accepts.
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "IP")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value="2020-2021"))
+    on_network.assert_awaited_once_with(20202021)
+    with_code.assert_not_awaited()
+
+
+async def test_raw_setup_pin_on_ble_discovery_is_rejected(controller):
+    # A BLE-only device has no IP yet, and a raw PIN carries no discriminator for a BLE scan.
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "BLE")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    with pytest.raises(ValueError, match="setup PIN"):
+        await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    with_code.assert_not_awaited()
+    on_network.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("transport", "value", "expected_code"),
+    [
+        ("BLE", "3497-011-2332", "34970112332"),
+        ("IP", "3497 0112 3320 0000 0001 2", "349701123320000000012"),
+        ("IP", "MT:Y.K9042C00KA0648G00", "MT:Y.K9042C00KA0648G00"),
+    ],
+)
+async def test_manual_and_qr_codes_entered_as_code_commission_with_code(
+    controller, transport: str, value: str, expected_code: str
+):
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, transport)
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value=value))
+    with_code.assert_awaited_once_with(expected_code, network_only=transport != "BLE")
+    on_network.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", ["12345", "123456789012", "not a code"])
+async def test_pairing_code_of_unknown_length_is_rejected(controller, value: str):
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "IP")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    with pytest.raises(ValueError, match="pairing code"):
+        await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value=value))
+    with_code.assert_not_awaited()
+    on_network.assert_not_awaited()

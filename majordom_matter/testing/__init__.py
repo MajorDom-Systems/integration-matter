@@ -104,7 +104,7 @@ class FakeMatterClient:
                 product_id=getattr(info, "productID", None),
                 commissioning_mode=1,  # advertising for commissioning
                 device_name=getattr(info, "productName", None) or "Fake On/Off Light",
-                addresses=["fd00::1"],  # on-network → the code path uses commission_on_network
+                addresses=["fd00::1"],  # on-network → commissioned with network_only=True
             )
         ]
 

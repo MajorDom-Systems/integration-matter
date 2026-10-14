@@ -87,3 +87,25 @@ def test_ladder_harvested_ha_and_fallback():
     # a wholly-uncurated attribute falls to the warning fallback
     _, source = classify_attribute(0x0ABC, 0x0001, "mystery", writable=True, in_system_cluster=False)
     assert source.startswith("fallback")
+
+
+def test_every_main_parameter_is_user_visible():
+    from majordom_matter.matter_spec import EVERYDAY_COMMANDS, MAIN_PARAMETER_BY_CLUSTER
+
+    for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
+        key = (cluster_id, spec.command_or_attribute_id)
+        assert key in EVERYDAY_COMMANDS or AttributeKey(*key) in EVERYDAY_CONTROL_ATTRIBUTES, hex(cluster_id)
+
+
+def test_unverified_command_mains_are_disabled():
+    from majordom_matter.matter_spec import MAIN_PARAMETER_BY_CLUSTER
+
+    # MicrowaveOvenControl, KeypadInput, EnergyEvse, WaterHeaterMode, WebRTCTransportProvider
+    assert MAIN_PARAMETER_BY_CLUSTER.keys().isdisjoint({0x5F, 0x509, 0x99, 0x9E, 0x553})
+
+
+def test_one_way_mains_have_their_counter_command_visible():
+    from majordom_matter.matter_spec import EVERYDAY_COMMANDS
+
+    assert {(0x104, 0x0), (0x104, 0x1)} <= EVERYDAY_COMMANDS  # ClosureControl Stop / MoveTo
+    assert {(0x081, 0x0), (0x081, 0x1)} <= EVERYDAY_COMMANDS  # ValveConfigurationAndControl Open / Close

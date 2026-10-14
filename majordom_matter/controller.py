@@ -14,7 +14,7 @@ from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
-from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole
+from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from matter_server.client import MatterClient
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
@@ -272,14 +272,15 @@ class MatterController(AbstractController):
                                     f"(endpoint {endpoint_id}, cluster {cluster_id})"
                                 )
                             value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
-                            value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                             device.parameters.append(
-                                MatterParameterState(**parameter.__dict__, value=self._mapper.normalize_value(value))
+                                MatterParameterState(
+                                    **parameter.__dict__,
+                                    value=self._mapper.attribute_value(cluster_id, attribute_id, value),
+                                )
                             )
 
-            main_parameter_id, default_value = self._get_main_parameter(device.id, node)
-            main_parameter = next((p for p in device.parameters if p.id == main_parameter_id), None)
-            device.main_parameter = main_parameter_id if main_parameter is not None else None
+            main_parameter, default_value = self._get_main_parameter(device.id, node, device.parameters)
+            device.main_parameter = main_parameter.id if main_parameter is not None else None
             if main_parameter is not None and default_value is not None:
                 if main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
                     main_parameter.default_value = self._mapper.normalize_value(default_value)
@@ -288,7 +289,7 @@ class MatterController(AbstractController):
                     main_parameter.integration_data.default_arguments = default_value
                 else:
                     raise MatterUnexpectedError(
-                        f"Command main parameter {main_parameter_id} expected dict default arguments, "
+                        f"Command main parameter {main_parameter.id} expected dict default arguments, "
                         f"got {type(default_value).__name__}: {default_value!r}"
                     )
             if main_parameter is not None and main_parameter.data_type is ParameterDataType.struct:
@@ -328,7 +329,6 @@ class MatterController(AbstractController):
                         continue
                     attribute_id = getattr(attribute, "attribute_id", -1)
                     value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
-                    value = self._mapper.apply_attribute_scale(cluster_id, attribute_id, value)
                     parameter_id = self._mapper.attribute_parameter_uuid(
                         device.id, endpoint_id, cluster_id, attribute_id
                     )
@@ -336,7 +336,7 @@ class MatterController(AbstractController):
                         DeviceParameterChange(
                             device_id=device.id,
                             parameter_id=parameter_id,
-                            value=value if isinstance(value, str | int | float | bool) else None,
+                            value=self._mapper.attribute_value(cluster_id, attribute_id, value),
                         )
                     )
 
@@ -537,8 +537,8 @@ class MatterController(AbstractController):
             event = DeviceParameterChange(
                 device_id=device_id,
                 parameter_id=parameter_id,
-                value=self._mapper.normalize_value(
-                    self._mapper.apply_attribute_scale(cluster_id, attribute_id, new_value)
+                value=self._mapper.attribute_value(
+                    cluster_id, attribute_id, self._mapper.parse_raw_attribute(cluster_id, attribute_id, new_value)
                 ),
             )
             asyncio.create_task(self.dependencies.output.controller_did_receive_events(self, [event]))
@@ -578,7 +578,6 @@ class MatterController(AbstractController):
         self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
     ):
         command_id = parameter.integration_data.command_id
-        time_requested_timeout = None
         if command_id is None or command_id < 0:
             raise MatterUnexpectedError(f"Invalid command_id: {command_id}")
 
@@ -599,8 +598,7 @@ class MatterController(AbstractController):
             if not getattr(cmd_class, "is_client", True):
                 continue
 
-            if cluster.id == 0x00000101:  # DoorLock
-                time_requested_timeout = 1000
+            time_requested_timeout = 1000 if cmd_class.must_use_timed_invoke else None
             if isinstance(arguments, dict):
                 arguments = self._mapper.arguments_by_name(
                     command.device_id, endpoint_id, cluster.id, command_id, cmd_class, arguments
@@ -640,7 +638,12 @@ class MatterController(AbstractController):
         value = self._mapper.parse_data_for_attribute(attribute_cls, command.value) if attribute_cls else command.value
         await self._matter_client.write_attribute(node.node_id, attribute_path, value)
 
-    def _get_main_parameter(self, device_id: UUID, node: MatterNode) -> tuple[UUID | None, DefaultParams]:
+    def _get_main_parameter(
+        self, device_id: UUID, node: MatterNode, parameters: list[MatterParameterState]
+    ) -> tuple[MatterParameterState | None, DefaultParams]:
+        # Only `user` parameters can be main (see can_be_main_parameter, which also needs the
+        # default_value set from these defaults) — skip hidden ones so they don't shadow a later match.
+        candidates = {p.id: p for p in parameters if p.visibility is ParameterVisibility.user}
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
                 if cluster_id not in endpoint.clusters:
@@ -650,21 +653,17 @@ class MatterController(AbstractController):
                     supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
                     if supported_attribute_ids and spec.command_or_attribute_id not in supported_attribute_ids:
                         continue
-                    return (
-                        self._mapper.attribute_parameter_uuid(
-                            device_id, endpoint_id, cluster_id, spec.command_or_attribute_id
-                        ),
-                        spec.default_params,
+                    parameter_id = self._mapper.attribute_parameter_uuid(
+                        device_id, endpoint_id, cluster_id, spec.command_or_attribute_id
+                    )
+                else:
+                    accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
+                    if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
+                        continue
+                    parameter_id = self._mapper.command_parameter_uuid(
+                        device_id, endpoint_id, cluster_id, spec.command_or_attribute_id
                     )
 
-                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
-                if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
-                    continue
-
-                return (
-                    self._mapper.command_parameter_uuid(
-                        device_id, endpoint_id, cluster_id, spec.command_or_attribute_id
-                    ),
-                    spec.default_params,
-                )
+                if parameter_id in candidates:
+                    return candidates[parameter_id], spec.default_params
         return None, None

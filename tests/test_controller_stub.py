@@ -340,3 +340,102 @@ async def test_pairing_code_of_unknown_length_is_rejected(controller, value: str
         await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value=value))
     with_code.assert_not_awaited()
     on_network.assert_not_awaited()
+
+
+async def test_timed_invoke_follows_the_command(controller, monkeypatch):
+    from chip.clusters.Objects import AdministratorCommissioning, OnOff
+
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+        state = await repo.state(device_id, MatterDeviceState)
+    timeouts: list[int | None] = []
+
+    async def send_device_command(node_id, endpoint_id, command, timed_request_timeout_ms=None, **kwargs):
+        timeouts.append(timed_request_timeout_ms)
+
+    monkeypatch.setattr(ctrl._matter_client, "send_device_command", send_device_command)
+    for endpoint_id, cluster_id, command_id in (
+        (0, AdministratorCommissioning.id, AdministratorCommissioning.Commands.RevokeCommissioning.command_id),
+        (13, OnOff.id, OnOff.Commands.Toggle.command_id),
+    ):
+        param_id = ctrl._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, command_id)
+        param = next(p for p in state.parameters if p.id == param_id)
+        await ctrl.send_command(DeviceCommand(device_id=device_id, parameter_id=param.id, value=None), device, param)
+    assert timeouts == [1000, None]
+
+
+async def test_hidden_main_candidate_does_not_block_a_visible_one(controller, monkeypatch):
+    from chip.clusters.Objects import LevelControl, OnOff
+
+    from majordom_matter.matter_spec import MainParameterSpec
+
+    monkeypatch.setattr(
+        "majordom_matter.controller.MAIN_PARAMETER_BY_CLUSTER",
+        {
+            LevelControl.id: MainParameterSpec(LevelControl.Commands.Step.command_id, None),  # a `setting`
+            OnOff.id: MainParameterSpec(OnOff.Commands.Toggle.command_id, None),
+        },
+    )
+    ctrl, _output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        state = await repo.state(device_id, MatterDeviceState)
+    assert state.main_parameter == ctrl._mapper.command_parameter_uuid(device_id, 13, OnOff.id, 0x02)
+    assert state.can_set_main_parameter(state.main_parameter)
+
+
+async def test_fetch_normalizes_values_like_the_subscription(controller):
+    from chip.clusters.Objects import BasicInformation, Descriptor, NetworkCommissioning
+
+    ctrl, output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+    last_network_id = ctrl._mapper.attribute_parameter_uuid(device_id, 0, NetworkCommissioning.id, 0x06)
+    server_list = ctrl._mapper.attribute_parameter_uuid(device_id, 0, Descriptor.id, 0x01)
+    capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
+
+    ctrl._matter_client.fire_attribute_update("0/49/6", b"\x01\x02\xff")  # bytes
+    await _wait(lambda: any(e.parameter_id == last_network_id for e in output.events))
+    subscribed = next(e.value for e in output.events if e.parameter_id == last_network_id)
+    before = len(output.events)
+    await ctrl.fetch(device)
+    fetched = {e.parameter_id: e.value for e in output.events[before:]}
+
+    assert fetched[last_network_id] == subscribed == "AQL/"
+    assert fetched[server_list] == [29, 31, 40, 42, 48, 49, 50, 51, 52, 60, 62, 63, 64]
+    assert fetched[capability_minima] == {"caseSessionsPerFabric": 3, "subscriptionsPerFabric": 65535}
+
+
+async def test_subscription_parses_raw_json_like_fetch(controller):
+    from chip.clusters.Objects import BasicInformation, ElectricalEnergyMeasurement
+    from matter_server.common.models import EventType
+
+    ctrl, output = controller
+    device_id = await _commission(ctrl, ctrl.dependencies.make_device_repository)
+    async with ctrl.dependencies.make_device_repository() as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+
+    def subscribed(parameter_id: UUID):
+        return next((e.value for e in reversed(output.events) if e.parameter_id == parameter_id), None)
+
+    # matter-server pushes raw JSON: a struct keyed by field id, not by name.
+    capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
+    ctrl._matter_client.fire_attribute_update("0/40/19", {"0": 4, "1": 3})
+    await _wait(lambda: subscribed(capability_minima) is not None)
+    pushed = subscribed(capability_minima)
+    before = len(output.events)
+    await ctrl.fetch(device)
+    fetched = {e.parameter_id: e.value for e in output.events[before:]}
+    assert pushed == fetched[capability_minima]
+    assert fetched[capability_minima] == {"caseSessionsPerFabric": 4, "subscriptionsPerFabric": 3}
+
+    # A scaled struct: the energy (mWh) is unwrapped and scaled to kWh, as pairing/fetch do.
+    cluster_id = ElectricalEnergyMeasurement.id
+    energy = ctrl._mapper.attribute_parameter_uuid(device_id, 1, cluster_id, 0x01)
+    ctrl._make_callback(device_id, energy, cluster_id, 0x01)(EventType.ATTRIBUTE_UPDATED, {"0": 5_000_000})
+    await _wait(lambda: subscribed(energy) is not None)
+    parsed = ElectricalEnergyMeasurement.Structs.EnergyMeasurementStruct(energy=5_000_000)
+    assert subscribed(energy) == ctrl._mapper.attribute_value(cluster_id, 0x01, parsed) == 5

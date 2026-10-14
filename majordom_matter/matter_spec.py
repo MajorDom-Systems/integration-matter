@@ -54,6 +54,21 @@ SYSTEM_CLUSTERS: set[int] = {
     0x40,  # FixedLabel
     0x41,  # UserLabel
     0x62,  # ScenesManagement
+    0x46,  # IcdManagement
+    0x451,  # WiFiNetworkManagement
+    0x452,  # ThreadBorderRouterManagement
+    0x453,  # ThreadNetworkDirectory
+    0x752,  # JointFabricDatastore
+    0x753,  # JointFabricAdministrator
+    0x801,  # TlsCertificateManagement
+    0x802,  # TlsClientManagement
+    0xFFF1FC05,  # UnitTesting
+}
+
+# Commands hidden on otherwise user-facing clusters.
+SYSTEM_COMMANDS: set[tuple[int, int]] = {
+    (0x101, 0x28),  # DoorLock.SetAliroReaderConfig (Aliro crypto material, like the Aliro* attributes)
+    (0x101, 0x29),  # DoorLock.ClearAliroReaderConfig
 }
 
 SYSTEM_ATTRIBUTES: set[int] = {
@@ -129,6 +144,32 @@ ATTRIBUTE_UNITS: dict[AttributeKey, ParameterUnit] = {
         0x403, 0x0
     ): ParameterUnit.pascal,  # PressureMeasurement.MeasuredValue (raw deci-kPa, see ATTRIBUTE_SCALE)
     AttributeKey(0x2F, 0xC): ParameterUnit.percentage,  # PowerSource.BatPercentRemaining
+    # The remaining temperatures (scaled below); Outdoor/Calibration/OccupiedSetback get celsius from the HA harvest.
+    AttributeKey(0x201, 0x3): ParameterUnit.celsius,  # Thermostat.AbsMinHeatSetpointLimit
+    AttributeKey(0x201, 0x4): ParameterUnit.celsius,  # Thermostat.AbsMaxHeatSetpointLimit
+    AttributeKey(0x201, 0x5): ParameterUnit.celsius,  # Thermostat.AbsMinCoolSetpointLimit
+    AttributeKey(0x201, 0x6): ParameterUnit.celsius,  # Thermostat.AbsMaxCoolSetpointLimit
+    AttributeKey(0x201, 0x13): ParameterUnit.celsius,  # Thermostat.UnoccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x14): ParameterUnit.celsius,  # Thermostat.UnoccupiedHeatingSetpoint
+    AttributeKey(0x201, 0x15): ParameterUnit.celsius,  # Thermostat.MinHeatSetpointLimit
+    AttributeKey(0x201, 0x16): ParameterUnit.celsius,  # Thermostat.MaxHeatSetpointLimit
+    AttributeKey(0x201, 0x17): ParameterUnit.celsius,  # Thermostat.MinCoolSetpointLimit
+    AttributeKey(0x201, 0x18): ParameterUnit.celsius,  # Thermostat.MaxCoolSetpointLimit
+    AttributeKey(0x201, 0x19): ParameterUnit.celsius,  # Thermostat.MinSetpointDeadBand
+    AttributeKey(0x201, 0x31): ParameterUnit.celsius,  # Thermostat.SetpointChangeAmount
+    AttributeKey(0x201, 0x35): ParameterUnit.celsius,  # Thermostat.OccupiedSetbackMin
+    AttributeKey(0x201, 0x36): ParameterUnit.celsius,  # Thermostat.OccupiedSetbackMax
+    AttributeKey(0x201, 0x37): ParameterUnit.celsius,  # Thermostat.UnoccupiedSetback
+    AttributeKey(0x201, 0x38): ParameterUnit.celsius,  # Thermostat.UnoccupiedSetbackMin
+    AttributeKey(0x201, 0x39): ParameterUnit.celsius,  # Thermostat.UnoccupiedSetbackMax
+    AttributeKey(0x201, 0x3A): ParameterUnit.celsius,  # Thermostat.EmergencyHeatDelta
+    AttributeKey(0x201, 0x46): ParameterUnit.celsius,  # Thermostat.ACCoilTemperature
+    AttributeKey(0x56, 0x1): ParameterUnit.celsius,  # TemperatureControl.MinTemperature
+    AttributeKey(0x56, 0x2): ParameterUnit.celsius,  # TemperatureControl.MaxTemperature
+    AttributeKey(0x56, 0x3): ParameterUnit.celsius,  # TemperatureControl.Step
+    AttributeKey(0x402, 0x1): ParameterUnit.celsius,  # TemperatureMeasurement.MinMeasuredValue
+    AttributeKey(0x402, 0x2): ParameterUnit.celsius,  # TemperatureMeasurement.MaxMeasuredValue
+    AttributeKey(0x402, 0x3): ParameterUnit.celsius,  # TemperatureMeasurement.Tolerance
 }
 
 # Multiplier applied to a raw attribute value to convert it into ATTRIBUTE_UNITS' base unit
@@ -140,6 +181,40 @@ ATTRIBUTE_SCALE: dict[AttributeKey, float] = {
     AttributeKey(0x91, 0x1): 1e-6,  # ElectricalEnergyMeasurement.CumulativeEnergyImported: mWh -> kWh
     AttributeKey(0x404, 0x0): 0.1,  # FlowMeasurement.MeasuredValue: deci-m3/h -> m3/h
     AttributeKey(0x403, 0x0): 100,  # PressureMeasurement.MeasuredValue: deci-kPa -> Pa
+    # Matter's int16 temperatures are 0.01 °C; the 8-bit Signed/UnsignedTemperature ones are 0.1 °C.
+    AttributeKey(0x201, 0x0): 0.01,  # Thermostat.LocalTemperature
+    AttributeKey(0x201, 0x1): 0.01,  # Thermostat.OutdoorTemperature
+    AttributeKey(0x201, 0x3): 0.01,  # Thermostat.AbsMinHeatSetpointLimit
+    AttributeKey(0x201, 0x4): 0.01,  # Thermostat.AbsMaxHeatSetpointLimit
+    AttributeKey(0x201, 0x5): 0.01,  # Thermostat.AbsMinCoolSetpointLimit
+    AttributeKey(0x201, 0x6): 0.01,  # Thermostat.AbsMaxCoolSetpointLimit
+    AttributeKey(0x201, 0x10): 0.1,  # Thermostat.LocalTemperatureCalibration (int8)
+    AttributeKey(0x201, 0x11): 0.01,  # Thermostat.OccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x12): 0.01,  # Thermostat.OccupiedHeatingSetpoint
+    AttributeKey(0x201, 0x13): 0.01,  # Thermostat.UnoccupiedCoolingSetpoint
+    AttributeKey(0x201, 0x14): 0.01,  # Thermostat.UnoccupiedHeatingSetpoint
+    AttributeKey(0x201, 0x15): 0.01,  # Thermostat.MinHeatSetpointLimit
+    AttributeKey(0x201, 0x16): 0.01,  # Thermostat.MaxHeatSetpointLimit
+    AttributeKey(0x201, 0x17): 0.01,  # Thermostat.MinCoolSetpointLimit
+    AttributeKey(0x201, 0x18): 0.01,  # Thermostat.MaxCoolSetpointLimit
+    AttributeKey(0x201, 0x19): 0.1,  # Thermostat.MinSetpointDeadBand (int8)
+    AttributeKey(0x201, 0x31): 0.01,  # Thermostat.SetpointChangeAmount (TemperatureDifference)
+    AttributeKey(0x201, 0x34): 0.1,  # Thermostat.OccupiedSetback (uint8)
+    AttributeKey(0x201, 0x35): 0.1,  # Thermostat.OccupiedSetbackMin (uint8)
+    AttributeKey(0x201, 0x36): 0.1,  # Thermostat.OccupiedSetbackMax (uint8)
+    AttributeKey(0x201, 0x37): 0.1,  # Thermostat.UnoccupiedSetback (uint8)
+    AttributeKey(0x201, 0x38): 0.1,  # Thermostat.UnoccupiedSetbackMin (uint8)
+    AttributeKey(0x201, 0x39): 0.1,  # Thermostat.UnoccupiedSetbackMax (uint8)
+    AttributeKey(0x201, 0x3A): 0.1,  # Thermostat.EmergencyHeatDelta (uint8)
+    AttributeKey(0x201, 0x46): 0.01,  # Thermostat.ACCoilTemperature
+    AttributeKey(0x56, 0x0): 0.01,  # TemperatureControl.TemperatureSetpoint
+    AttributeKey(0x56, 0x1): 0.01,  # TemperatureControl.MinTemperature
+    AttributeKey(0x56, 0x2): 0.01,  # TemperatureControl.MaxTemperature
+    AttributeKey(0x56, 0x3): 0.01,  # TemperatureControl.Step
+    AttributeKey(0x402, 0x0): 0.01,  # TemperatureMeasurement.MeasuredValue
+    AttributeKey(0x402, 0x1): 0.01,  # TemperatureMeasurement.MinMeasuredValue
+    AttributeKey(0x402, 0x2): 0.01,  # TemperatureMeasurement.MaxMeasuredValue
+    AttributeKey(0x402, 0x3): 0.01,  # TemperatureMeasurement.Tolerance
 }
 
 
@@ -148,11 +223,21 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
     AttributeKey(0x0300, 0x0000): 1,  # CurrentHue (verified: id 0x0000, uint8, step 1)
     AttributeKey(0x0300, 0x0001): 1,  # CurrentSaturation (verified: id 0x0001, uint8, step 1)
     AttributeKey(0x0300, 0x0007): 1,  # ColorTemperatureMireds (verified: id 0x0007, uint16, step 1)
-    AttributeKey(0x0201, 0x0010): 0.01,  # LocalTemperatureCalibration (SignedTemperature, -2.5°C to 2.5°C)
+    AttributeKey(0x0201, 0x0010): 0.1,  # LocalTemperatureCalibration (SignedTemperature, -2.5°C to 2.5°C)
     AttributeKey(0x0201, 0x0011): 0.01,  # OccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0012): 0.01,  # OccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0013): 0.01,  # UnoccupiedCoolingSetpoint (temperature type, 0.01°C resolution)
     AttributeKey(0x0201, 0x0014): 0.01,  # UnoccupiedHeatingSetpoint (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0015): 0.01,  # MinHeatSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0016): 0.01,  # MaxHeatSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0017): 0.01,  # MinCoolSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0018): 0.01,  # MaxCoolSetpointLimit (temperature type, 0.01°C resolution)
+    AttributeKey(0x0201, 0x0019): 0.1,  # MinSetpointDeadBand (SignedTemperature, 0.1°C resolution)
+    AttributeKey(0x0201, 0x0034): 0.1,  # OccupiedSetback (UnsignedTemperature, 0.1°C resolution)
+    AttributeKey(0x0201, 0x0037): 0.1,  # UnoccupiedSetback (UnsignedTemperature, 0.1°C resolution)
+    AttributeKey(
+        0x0056, 0x0000
+    ): 0.01,  # TemperatureSetpoint (temperature type; the device's Step wins, see METADATA_SOURCES)
     AttributeKey(0x0402, 0x0000): 0.01,  # MeasuredValue (temperature type, 0.01°C resolution)
     AttributeKey(0x0405, 0x0000): 0.01,  # MeasuredValue (0.01% resolution)
     AttributeKey(0x0403, 0x0000): 10,  # MeasuredValue (raw step 0.1 deci-kPa, scaled x100 to Pa -> 10 Pa)
@@ -164,12 +249,13 @@ ATTRIBUTE_MIN_STEPS: dict[AttributeKey, int | float] = {
 
 
 class MetadataSource(NamedTuple):
-    """Sibling attributes whose runtime VALUES provide a parameter's min/max — the device's own
+    """Sibling attributes whose runtime VALUES provide a parameter's min/max/step — the device's own
     limit attributes (the ones we hide from the UI as metadata). Priority 1 in the resolver:
     runtime sibling value > spec table > wire-type default."""
 
     min_attr: int | None = None
     max_attr: int | None = None
+    step_attr: int | None = None
 
 
 METADATA_SOURCES: dict[AttributeKey, MetadataSource] = {
@@ -182,6 +268,7 @@ METADATA_SOURCES: dict[AttributeKey, MetadataSource] = {
     AttributeKey(0x201, 0x11): MetadataSource(0x05, 0x06),  # OccupiedCoolingSetpoint <- AbsMin/MaxCoolSetpointLimit
     AttributeKey(0x201, 0x12): MetadataSource(0x03, 0x04),  # OccupiedHeatingSetpoint <- AbsMin/MaxHeatSetpointLimit
     AttributeKey(0x300, 0x07): MetadataSource(0x400B, 0x400C),  # ColorTemperatureMireds <- physical min/max mireds
+    AttributeKey(0x056, 0x00): MetadataSource(0x01, 0x02, 0x03),  # TemperatureSetpoint <- Min/MaxTemperature, Step
 }
 
 
@@ -190,6 +277,31 @@ FIELD_TYPE_TO_DATA_TYPE: dict[type, ParameterDataType] = {
     int: ParameterDataType.integer,
     float: ParameterDataType.decimal,
     str: ParameterDataType.string,
+    bytes: ParameterDataType.data,
+}
+
+
+class ScaledField(NamedTuple):
+    """A command field sent in a scaled wire unit, like ATTRIBUTE_SCALE: the user enters (and
+    default_params give) `unit`; the wire value is that divided by `scale`."""
+
+    unit: ParameterUnit
+    scale: float
+
+
+COMMAND_FIELD_SCALE: dict[tuple[int, int, str], ScaledField] = {
+    (0x56, 0x0, "targetTemperature"): ScaledField(ParameterUnit.celsius, 0.01),  # TemperatureControl.SetTemperature
+    (0x201, 0x0, "amount"): ScaledField(ParameterUnit.celsius, 0.1),  # Thermostat.SetpointRaiseLower
+}
+
+# `bytes` command fields the user types as text: a UTF-8 `string` instead of base64 `data`.
+TEXT_BYTES_FIELDS: set[tuple[int, int, str]] = {
+    (0x101, 0x00, "PINCode"),  # DoorLock.LockDoor
+    (0x101, 0x01, "PINCode"),  # DoorLock.UnlockDoor
+    (0x101, 0x03, "PINCode"),  # DoorLock.UnlockWithTimeout
+    (0x101, 0x27, "PINCode"),  # DoorLock.UnboltDoor
+    (0x101, 0x22, "credentialData"),  # DoorLock.SetCredential (a PIN; RFID/biometrics are enrolled at the lock)
+    (0x802, 0x00, "hostname"),  # TlsClientManagement.ProvisionEndpoint
 }
 
 
@@ -291,6 +403,11 @@ EVERYDAY_COMMANDS: set[tuple[int, int]] = {
     (0x506, 0x0),
     (0x506, 0x1),
     (0x506, 0x2),  # MediaPlayback Play / Pause / Stop
+    (0x104, 0x0),
+    (0x104, 0x1),  # ClosureControl Stop / MoveTo
+    (0x556, 0x0),  # Chime PlayChimeSound
+    (0x081, 0x0),
+    (0x081, 0x1),  # ValveConfigurationAndControl Open / Close
 }
 
 
@@ -319,18 +436,20 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
     0x00000202: MainParameterSpec(0x00000000, 0x04),  # FanControl.FanMode.On(attribute)
     0x00000056: MainParameterSpec(
         0x00000000,
-        {"targetTemperature": 22},
+        {"targetTemperature": 22},  # °C, see COMMAND_FIELD_SCALE
         # TemperatureControl.SetTemperature (targetTemperature/targetTemperatureLevel are
         # feature-gated & mutually exclusive; targetTemperature covers the common "TN" case)
     ),
     0x00000060: MainParameterSpec(0x00000002, None),  # OperationalState.Start
     0x00000061: MainParameterSpec(0x00000003, None),  # RVCOperationalState.Resume
-    0x0000005F: MainParameterSpec(0x00000001, {"timeToAdd": 30}),  # MicrowaveOvenControl.AddMoreTime
+    # Unverified: OperationalState.Start wins on a Microwave Oven anyway; to verify on real devices.
+    # 0x0000005F: MainParameterSpec(0x00000001, {"timeToAdd": 30}),  # MicrowaveOvenControl.AddMoreTime
     0x00000050: MainParameterSpec(0x00000000, {"newMode": 0}),  # ModeSelect.ChangeToMode
     0x00000101: MainParameterSpec(0x00000001, {"PINCode": None}),  # DoorLock.UnlockDoor
     # 0x0000005C: MainParameterSpec(0x00000000, None),  # SmokeCoAlarm.SelfTestRequest
     0x00000506: MainParameterSpec(0x00000000, None),  # MediaPlayback.Play
-    0x00000509: MainParameterSpec(0x00000000, {"keyCode": 0x44}),  # KeyPadInpud.SendKey.Play
+    # Unverified: a raw remote-key sender, shadowed by OnOff/MediaPlayback; to verify on real devices.
+    # 0x00000509: MainParameterSpec(0x00000000, {"keyCode": 0x44}),  # KeyPadInpud.SendKey.Play
     0x00000102: MainParameterSpec(
         0x00000000,
         None,
@@ -343,11 +462,14 @@ MAIN_PARAMETER_BY_CLUSTER: dict[int, MainParameterSpec] = {
         # ClosureControl.MoveTo{position=MoveToFullyOpen} — open is the everyday one-tap;
         # ClosureControl has no no-arg Open command (a latched closure may also need latch=False)
     ),
-    0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
-    0x0000009E: MainParameterSpec(0x00000000, {"newMode": 0}),  # WaterHeaterMode.ChangeToMode
-    0x00000553: MainParameterSpec(
-        0x00000000, {"streamUsage": 0, "originatingEndpointID": 0}
-    ),  # WebRTCTransportProvider.SolicitOffer
+    # Unverified: one-way (EnableCharging needs current limits) and stops a car charge; to verify on real devices.
+    # 0x00000099: MainParameterSpec(0x00000001, None),  # EnergyEvse.Disable
+    # Unverified: mode 0 is vendor-defined and may not exist; to verify on real devices.
+    # 0x0000009E: MainParameterSpec(0x00000000, {"newMode": 0}),  # WaterHeaterMode.ChangeToMode
+    # Unverified: needs a WebRTC requestor session on the hub; to verify on real devices.
+    # 0x00000553: MainParameterSpec(
+    #     0x00000000, {"streamUsage": 0, "originatingEndpointID": 0}
+    # ),  # WebRTCTransportProvider.SolicitOffer
     0x00000556: MainParameterSpec(0x00000000, None),  # Chime.PlayChimeSound
     0x00000081: MainParameterSpec(0x00000000, None),  # ValveConfigurationAndControl.Open
 }

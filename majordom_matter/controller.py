@@ -7,7 +7,7 @@ from uuid import UUID
 
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
-from chip.clusters.Objects import Identify
+from chip.clusters.Objects import ClosureControl, Identify, OperationalState
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.discovery.ble_discovery import BLEDiscoveryInfo, BLEDiscoveryService
 from majordom_integration_sdk.schemas.base import NonEmptyStr
@@ -29,7 +29,15 @@ from .exceptions import (
     MatterUnsupportedParameter,
 )
 from .mapper import MatterMapper
-from .matter_spec import MAIN_PARAMETER_BY_CLUSTER, DefaultParams
+from .matter_spec import (
+    CLOSURE_MAIN_STATE,
+    MAIN_PARAMETER_BY_CLUSTER,
+    STATE_TOGGLE_ATTRIBUTES,
+    STATE_TOGGLE_COMMANDS,
+    AttributeKey,
+    DefaultParams,
+    MainParameterSpec,
+)
 from .model import (
     MatterDevice,
     MatterDeviceIntegrationData,
@@ -359,7 +367,19 @@ class MatterController(AbstractController):
             if parameter.integration_data.type is MatterParameterTypeEnum.command:
                 await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
             elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
-                await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
+                attribute_id = parameter.integration_data.attribute_id
+                if attribute_id is not None and AttributeKey(cluster_id, attribute_id) in STATE_TOGGLE_ATTRIBUTES:
+                    cluster_command = self._state_toggle_command(
+                        node, endpoint_id, cluster, attribute_id, command.value
+                    )
+                    await self._matter_client.send_device_command(
+                        node.node_id,
+                        endpoint_id,
+                        cluster_command,
+                        timed_request_timeout_ms=1000 if cluster_command.must_use_timed_invoke else None,
+                    )
+                else:
+                    await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
         except UnknownError as e:
             error = str(e)
 
@@ -613,6 +633,43 @@ class MatterController(AbstractController):
                 )
             return
 
+    @staticmethod
+    def _state_toggle_command(node: MatterNode, endpoint_id: int, cluster, attribute_id: int, value) -> ClusterCommand:
+        """The command that sets a read-only state attribute to `value` (see STATE_TOGGLE_ATTRIBUTES)."""
+        current = node.get_attribute_value(endpoint_id, cluster.id, attribute_id)
+        key = AttributeKey(cluster.id, attribute_id)
+        if key == CLOSURE_MAIN_STATE:
+            if current in (
+                ClosureControl.Enums.MainStateEnum.kMoving,
+                ClosureControl.Enums.MainStateEnum.kWaitingForMotion,
+            ):
+                return ClosureControl.Commands.Stop()
+            overall = node.get_attribute_value(
+                endpoint_id, cluster.id, ClosureControl.Attributes.OverallCurrentState.attribute_id
+            )
+            closed = getattr(overall, "position", None) == ClosureControl.Enums.CurrentPositionEnum.kFullyClosed
+            target = ClosureControl.Enums.TargetPositionEnum
+            return ClosureControl.Commands.MoveTo(
+                position=target(target.kMoveToFullyOpen if closed else target.kMoveToFullyClosed)
+            )
+        if key == AttributeKey(
+            OperationalState.id, OperationalState.Attributes.OperationalState.attribute_id
+        ) and current not in (
+            OperationalState.Enums.OperationalStateEnum.kRunning,
+            OperationalState.Enums.OperationalStateEnum.kPaused,
+        ):
+            raise MatterUnexpectedError(
+                "OperationalState only pauses or resumes a running cycle; it never starts one from idle"
+            )
+        command_id = STATE_TOGGLE_COMMANDS[key].get(value)
+        if command_id is None:
+            raise MatterUnexpectedError(f"{cluster.__class__.__name__} state {value!r} cannot be set from MajorDom")
+        return next(
+            command_class
+            for _, command_class in inspect.getmembers(cluster.Commands, inspect.isclass)
+            if issubclass(command_class, ClusterCommand) and command_class.command_id == command_id
+        )()
+
     async def _write_cluster_attribute(
         self, node, endpoint_id: int, cluster_id: int, parameter: MatterParameter, command: DeviceCommand
     ):
@@ -645,25 +702,28 @@ class MatterController(AbstractController):
         # default_value set from these defaults) — skip hidden ones so they don't shadow a later match.
         candidates = {p.id: p for p in parameters if p.visibility is ParameterVisibility.user}
         for endpoint_id, endpoint in node.endpoints.items():
-            for cluster_id, spec in MAIN_PARAMETER_BY_CLUSTER.items():
+            for cluster_id, cluster_spec in MAIN_PARAMETER_BY_CLUSTER.items():
                 if cluster_id not in endpoint.clusters:
                     continue
-
-                if cluster_id == 0x00000202:  # FanControl
-                    supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
-                    if supported_attribute_ids and spec.command_or_attribute_id not in supported_attribute_ids:
-                        continue
-                    parameter_id = self._mapper.attribute_parameter_uuid(
-                        device_id, endpoint_id, cluster_id, spec.command_or_attribute_id
-                    )
-                else:
-                    accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
-                    if accepted_command_ids and spec.command_or_attribute_id not in accepted_command_ids:
-                        continue
-                    parameter_id = self._mapper.command_parameter_uuid(
-                        device_id, endpoint_id, cluster_id, spec.command_or_attribute_id
-                    )
-
-                if parameter_id in candidates:
-                    return candidates[parameter_id], spec.default_params
+                # An empty list means the device didn't report it: assume supported.
+                supported_attribute_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFFB) or []
+                accepted_command_ids: list[int] = node.get_attribute_value(endpoint_id, cluster_id, 0xFFF9) or []
+                spec: MainParameterSpec | None = cluster_spec
+                while spec is not None:
+                    spec_id = spec.command_or_attribute_id
+                    if spec.is_attribute:
+                        # A state toggle also needs every command it taps through.
+                        needed_command_ids = STATE_TOGGLE_COMMANDS.get(AttributeKey(cluster_id, spec_id), {}).values()
+                        supported = (not supported_attribute_ids or spec_id in supported_attribute_ids) and (
+                            not accepted_command_ids or set(needed_command_ids) <= set(accepted_command_ids)
+                        )
+                        parameter_id = self._mapper.attribute_parameter_uuid(
+                            device_id, endpoint_id, cluster_id, spec_id
+                        )
+                    else:
+                        supported = not accepted_command_ids or spec_id in accepted_command_ids
+                        parameter_id = self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, spec_id)
+                    if supported and parameter_id in candidates:
+                        return candidates[parameter_id], spec.default_params
+                    spec = spec.fallback
         return None, None

@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from majordom_integration_sdk import Context, Endpoint, WifiCredentials
+from majordom_integration_sdk import Context, Endpoint, Need, PeripheralChange, WifiCredentials
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
@@ -549,6 +549,13 @@ async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypat
 
     with pytest.raises(MatterConnectionError):
         await asyncio.wait_for(MatterController(deps).start(), 2)
+
+
+async def test_a_bluetooth_adapter_coming_or_going_keeps_matter_running(controller):
+    ctrl, _ = controller
+    assert Need("ble", required=False) in MatterController.needs
+    assert await ctrl.peripheral_did_change(PeripheralChange("ble", None, Endpoint("ble", "bluez", "hci0")))
+    assert not await ctrl.peripheral_did_change(PeripheralChange("matter", None, None))
 
 
 async def test_stopping_matter_reports_no_error(monkeypatch):

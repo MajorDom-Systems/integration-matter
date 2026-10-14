@@ -72,8 +72,8 @@ CLI, watch mode, and the programmatic API.
 | Capability | Required | Provided by |
 |------------|----------|-------------|
 | `matter/ws` | yes | the `matter-server` service below; standalone, any matter-server you run |
+| `ble` | no | the host's Bluetooth adapter. Semantic only: the controller reaches it through the hub's `BLEService` (SDK), which also serves matter-server's Bluetooth over `/ble` (`majordom_matter/ble_backend.py`) |
 | `ip` (for `matter-server`) | yes | the host |
-| `ble` (for `matter-server`) | no | unused: matter-server's Bluetooth is the hub's `BLEService`, served over `/ble` by `majordom_matter/ble_backend.py` |
 | `thread/otbr-rest` (for `matter-server`) | no | a Thread border router: the hub's `otbr` or `multiprotocol` service on a Thread-capable stick. Without one, Matter works over Wi-Fi and Ethernet |
 
 - **Services it brings:** `matter-server` (`majordom_matter/config.py`), which the hub runs while

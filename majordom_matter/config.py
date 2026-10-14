@@ -5,7 +5,7 @@ from majordom_integration_sdk import Endpoint, Need, Service
 MATTER_SERVER = Service(
     "matter-server",
     # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet.
-    needs=[Need("ip"), Need("ble", required=False), Need("thread", ["otbr-rest"], required=False)],
+    needs=[Need("ip"), Need("thread", ["otbr-rest"], required=False)],
     provides=[Endpoint("matter", "ws", "ws://127.0.0.1:5580/ws")],
     compose={
         # :dev pinned by digest (2026-10-08); bump on purpose

@@ -8,7 +8,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import Need
+from majordom_integration_sdk import Need, PeripheralChange
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.discovery.ble_discovery import BLEDiscoveryInfo, BLEDiscoveryService
 from majordom_integration_sdk.schemas.base import NonEmptyStr
@@ -60,7 +60,8 @@ class MatterController(AbstractController):
     Hub's shared BLE service. See readme.md.
     """
 
-    needs = [Need("matter", ["ws"])]
+    # ble is semantic: the hub's BLEService (for discovery and matter-server) comes through the SDK, not a link
+    needs = [Need("matter", ["ws"]), Need("ble", required=False)]
     services = [MATTER_SERVER]
 
     _matter_client: MatterClient
@@ -127,6 +128,10 @@ class MatterController(AbstractController):
 
         await self._sync_with_server()
         self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
+
+    @override
+    async def peripheral_did_change(self, change: PeripheralChange) -> bool:
+        return change.family == "ble"  # the BLEService follows its adapters itself
 
     async def _sync_with_server(self):
         """Hands matter-server the networks and follows the devices on its fabric; on every (re)connect."""

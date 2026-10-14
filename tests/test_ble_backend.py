@@ -74,10 +74,15 @@ async def matter_server():
 
 
 @pytest.fixture
-async def backend(matter_server):
+def radios() -> list[FakeBLESource]:
+    return [FakeBLESource("hci0", connection=FakeConnection()), FakeBLESource("hci1", connection=FakeConnection())]
+
+
+@pytest.fixture
+async def backend(matter_server, radios):
     url, backends = matter_server
-    radio = FakeBLESource("hci0", connection=FakeConnection())
-    ble = BLEService(sources=[radio])
+    radio = radios[0]
+    ble = BLEService(sources=radios)
     await ble.start()
     async with ClientSession() as session:
         task = asyncio.create_task(MatterServerBLEBackend(url, ble, session).run())
@@ -132,9 +137,10 @@ async def test_commissioning_runs_through_the_hub_radio(backend):
     assert connection.disconnected
 
 
-async def test_failures_are_answered_with_protocol_errors(backend):
+async def test_failures_are_answered_with_protocol_errors(backend, radios):
     ws, radio = backend
     radio.connection = None
+    radios[1].connection = None
 
     assert (await command(ws, 0, "connect", address="CC:DD"))["error"] == "connection_failed"
     assert (await command(ws, 1, "discover_services", connection_handle=9))["error"] == "not_connected"
@@ -166,3 +172,51 @@ async def test_a_dropped_websocket_reconnects(backend, matter_server):
     await ws.close()
     ws = await asyncio.wait_for(backends.get(), 5)
     assert await ws.receive_json(timeout=5) == {"type": "hello", "version": 1}
+
+
+async def test_a_connection_leases_the_strongest_source_until_it_is_gone(backend, radios):
+    ws, hci0 = backend
+    hci1 = radios[1]
+    hci0.advertise("AA:BB", rssi=-80)
+    hci1.advertise("AA:BB", rssi=-40)
+    await asyncio.sleep(0)
+
+    assert (await command(ws, 0, "connect", address="AA:BB"))["success"]
+    assert hci1.connected == ["AA:BB"] and hci0.connected == []
+    assert hci1.on_advertisement is None and hci0.on_advertisement
+
+    assert (await command(ws, 1, "disconnect", connection_handle=1))["success"]
+    assert hci1.on_advertisement
+
+
+async def test_a_busy_source_fails_the_connect_and_a_lost_link_releases_it(backend, radios):
+    ws, hci0 = backend
+    hci0.advertise("AA:BB")
+    await asyncio.sleep(0)
+    assert (await command(ws, 0, "connect", address="AA:BB", timeout=300))["success"]
+
+    reply = await command(ws, 1, "connect", address="AA:BB", timeout=300)
+    assert reply["error"] == "connection_failed"
+
+    await command(ws, 2, "discover_characteristics", connection_handle=1, service_uuid=MATTER)
+    await command(ws, 3, "write_characteristic", connection_handle=1, characteristic_uuid=C1, value="aHM=")
+    hci0.connection.error = GattError("link lost")
+    await ws.send_bytes(FRAME.pack(0x01, 1) + b"segment")
+    assert (await ws.receive_json(timeout=5))["event"] == "disconnected"
+    async with asyncio.timeout(5):
+        while not hci0.on_advertisement:
+            await asyncio.sleep(0.01)
+
+
+async def test_a_dropped_websocket_releases_the_leased_source(backend, matter_server):
+    ws, radio = backend
+    radio.advertise("AA:BB")
+    await asyncio.sleep(0)
+    assert (await command(ws, 0, "connect", address="AA:BB"))["success"]
+    assert radio.on_advertisement is None
+
+    await ws.close()
+    async with asyncio.timeout(5):
+        while not radio.on_advertisement:
+            await asyncio.sleep(0.01)
+    assert radio.connection.disconnected

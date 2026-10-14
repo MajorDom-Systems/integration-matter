@@ -34,6 +34,7 @@ class _Failure(Exception):
 @dataclass
 class _Peripheral:
     connection: BLEConnection
+    lease: contextlib.AsyncExitStack  # holds the Bluetooth source leased for this connection
     characteristics: dict[str, int] = field(default_factory=dict)  # uuid -> handle
     write_handle: int | None = None  # where binary frames go: the characteristic last written
 
@@ -125,7 +126,7 @@ class MatterServerBLEBackend:
             except Exception as e:  # a BTP segment is no request to fail, and BTP can't skip one: end the connection
                 logger.warning(f"Bluetooth write on connection {handle} failed, disconnecting: {e!r}")
                 self._lost(handle)
-                self._spawn(peripheral.connection.disconnect())
+                self._spawn(self._close(peripheral))
 
     def _peripheral(self, connection_handle: int) -> _Peripheral:
         if peripheral := self._peripherals.get(connection_handle):
@@ -153,19 +154,23 @@ class MatterServerBLEBackend:
 
     async def _connect(self, address: str, timeout: int = 30_000):
         self._last_handle = handle = self._last_handle % 0xFFFF + 1
-        try:
-            connection = await asyncio.wait_for(self._ble.connect(address, lambda: self._lost(handle)), timeout / 1000)
-        except TimeoutError as e:
-            raise _Failure("timeout") from e
-        except ConnectionError as e:
-            raise _Failure("connection_failed", str(e)) from e
-        self._peripherals[handle] = _Peripheral(connection)
+        async with contextlib.AsyncExitStack() as stack:  # closed here on failure, kept for the connection otherwise
+            try:
+                lease = await stack.enter_async_context(
+                    self._ble.exclusive(address, owner="matter", timeout=timeout / 1000)
+                )
+                connection = await asyncio.wait_for(lease.connect(lambda: self._lost(handle)), timeout / 1000)
+            except TimeoutError as e:
+                raise _Failure("timeout") from e
+            except ConnectionError as e:  # incl. BLEBusyError: every source that hears the device is leased
+                raise _Failure("connection_failed", str(e)) from e
+            self._peripherals[handle] = _Peripheral(connection, stack.pop_all())
         return {"connection_handle": handle, "mtu": connection.mtu}
 
     async def _disconnect(self, connection_handle: int):
         peripheral = self._peripheral(connection_handle)
         del self._peripherals[connection_handle]
-        await peripheral.connection.disconnect()
+        await self._close(peripheral)
 
     async def _discover_services(self, connection_handle: int):
         peripheral = self._peripheral(connection_handle)
@@ -245,7 +250,8 @@ class MatterServerBLEBackend:
             self._spawn(self._ws.send_bytes(_FRAME.pack(_NOTIFICATION, connection_handle) + data))
 
     def _lost(self, connection_handle: int):
-        if self._peripherals.pop(connection_handle, None):
+        if peripheral := self._peripherals.pop(connection_handle, None):
+            self._spawn(peripheral.lease.aclose())
             self._spawn(self._send_event("disconnected", {"connection_handle": connection_handle}))
 
     async def _send_event(self, event: str, data: dict):
@@ -257,7 +263,15 @@ class MatterServerBLEBackend:
             task.cancel()
         await self._stop_scan()
         peripherals, self._peripherals = list(self._peripherals.values()), {}
-        await asyncio.gather(*(p.connection.disconnect() for p in peripherals), return_exceptions=True)
+        await asyncio.gather(*(self._close(p) for p in peripherals), return_exceptions=True)
+
+    @staticmethod
+    async def _close(peripheral: _Peripheral):
+        """Ends the connection and gives its Bluetooth source back, whatever the disconnect does."""
+        try:
+            await peripheral.connection.disconnect()
+        finally:
+            await peripheral.lease.aclose()
 
     def _spawn(self, coroutine):
         task = asyncio.create_task(coroutine)

@@ -100,6 +100,7 @@ CLI, watch mode, and the programmatic API.
 - [x] Availability tracking while running (`controller_did_lose_device` / `last_error`)
 - [x] Graceful shutdown in `stop`
 - [x] Tests pass against virtual/simulated devices (stub + dockerized MVD suite)
+- [x] Owned — maintained by Parker Industries
 
 ### Parameter metadata sources & priority
 

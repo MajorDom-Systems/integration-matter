@@ -57,10 +57,10 @@ def _gatt(error: str) -> Iterator[None]:
 
 
 class MatterServerBLEBackend:
-    """matter-server's Bluetooth backend: serves the hub's `BLEService`, with every adapter and ESPHome node lent to
-    it, to matter-server over matter-server's BLE proxy protocol on ``/ble``. The direction is hub → matter-server:
-    matter-server has no radio of its own, so its scans, connections and GATT traffic (BTP during commissioning) all
-    run through this client, which reconnects whenever matter-server goes away. Run one per matter-server.
+    """Provides the hub's BLE transport to matter-server by acting as a WebSocket client of matter-server's ``/ble``
+    endpoint.
+
+    It reconnects whenever matter-server goes away. Run one per matter-server.
     """
 
     def __init__(self, url: str, ble: BLEService, session: ClientSession):

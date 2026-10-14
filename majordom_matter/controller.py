@@ -111,8 +111,13 @@ class MatterController(AbstractController):
         await self._matter_client.connect()
 
         init_ready = asyncio.Event()
-        self._background_tasks.append(asyncio.create_task(self._listen(init_ready)))
-        await init_ready.wait()
+        listener = asyncio.create_task(self._listen(init_ready))
+        self._background_tasks.append(listener)
+        ready = asyncio.create_task(init_ready.wait())
+        await asyncio.wait({ready, listener}, return_when=asyncio.FIRST_COMPLETED)
+        ready.cancel()
+        if not init_ready.is_set():
+            raise MatterConnectionError("matter-server went away before it was ready")
 
         # Networks new devices get commissioned onto.
         if wifi := self.dependencies.context.wifi:
@@ -215,8 +220,9 @@ class MatterController(AbstractController):
             await self._matter_client.start_listening(init_ready=init_ready)
         except Exception as e:
             logging.warning(f"[{self.name}] matter-server listener failed: {e!r}")
-        message = "Lost the connection to the Matter server."
-        await self.dependencies.output.controller_did_encounter_error(self, message, still_running=False)
+        if init_ready.is_set():  # before that, start() fails instead
+            message = "Lost the connection to the Matter server."
+            await self.dependencies.output.controller_did_encounter_error(self, message, still_running=False)
 
     # -------------------------------------------------------------------------
     # Hub -> device operations

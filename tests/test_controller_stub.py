@@ -21,6 +21,7 @@ from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, 
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
 
 from majordom_matter import MatterController
+from majordom_matter.exceptions import MatterConnectionError
 from majordom_matter.mapper import MatterMapper
 from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
 from majordom_matter.testing import FakeMatterClient
@@ -505,6 +506,20 @@ async def test_a_lost_matter_server_asks_the_hub_to_restart_matter(controller):
     cast(FakeMatterClient, ctrl._matter_client).lose_server()
     await _wait(lambda: bool(output.errors))
     assert [still_running for _, still_running in output.errors] == [False]
+
+
+async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypatch):
+    class GoneAtOnce(FakeMatterClient):
+        async def start_listening(self, init_ready: asyncio.Event | None = None) -> None:
+            return None
+
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", GoneAtOnce)
+    deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
+        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+    )
+
+    with pytest.raises(MatterConnectionError):
+        await asyncio.wait_for(MatterController(deps).start(), 2)
 
 
 async def test_stopping_matter_reports_no_error(monkeypatch):

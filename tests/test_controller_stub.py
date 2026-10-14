@@ -285,3 +285,58 @@ def test_code_option_offers_the_matter_manual_code_mask(pairing_hint: int | None
     options = mapper.define_credentials_options(1, pairing_hint, is_on_network=is_on_network)
     assert options == [CredentialsType.code]
     assert options[0].code_mask == "DDDD-DDD-DDDD"
+
+
+async def test_raw_setup_pin_on_network_discovery_commissions_on_network(controller):
+    # 8 digits is the raw setup PIN, which only commission_on_network accepts.
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "IP")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value="2020-2021"))
+    on_network.assert_awaited_once_with(20202021)
+    with_code.assert_not_awaited()
+
+
+async def test_raw_setup_pin_on_ble_discovery_is_rejected(controller):
+    # A BLE-only device has no IP yet, and a raw PIN carries no discriminator for a BLE scan.
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "BLE")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    with pytest.raises(ValueError, match="setup PIN"):
+        await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    with_code.assert_not_awaited()
+    on_network.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("transport", "value", "expected_code"),
+    [
+        ("BLE", "3497-011-2332", "34970112332"),
+        ("IP", "3497 0112 3320 0000 0001 2", "349701123320000000012"),
+        ("IP", "MT:Y.K9042C00KA0648G00", "MT:Y.K9042C00KA0648G00"),
+    ],
+)
+async def test_manual_and_qr_codes_entered_as_code_commission_with_code(
+    controller, transport: str, value: str, expected_code: str
+):
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, transport)
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value=value))
+    with_code.assert_awaited_once_with(expected_code, network_only=transport != "BLE")
+    on_network.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", ["12345", "123456789012", "not a code"])
+async def test_pairing_code_of_unknown_length_is_rejected(controller, value: str):
+    ctrl, _output = controller
+    discovery = await _discovery_over(ctrl, "IP")
+    with_code, on_network = _spy_commissioning(ctrl)
+
+    with pytest.raises(ValueError, match="pairing code"):
+        await _pair(ctrl, discovery, ProvidedCredentials(type=CredentialsType.code, value=value))
+    with_code.assert_not_awaited()
+    on_network.assert_not_awaited()

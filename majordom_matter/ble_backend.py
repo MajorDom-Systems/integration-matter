@@ -39,6 +39,10 @@ class _Peripheral:
     write_handle: int | None = None  # where binary frames go: the characteristic last written
 
 
+def ble_url(matter_url: str) -> str:
+    return matter_url.removesuffix("/ws") + "/ble"
+
+
 def _uuid(text: str) -> UUID:
     """Short (``fff6``), 32-bit or full UUID text as a UUID."""
     return UUID(text.rjust(8, "0") + "-0000-1000-8000-00805f9b34fb" if len(text) <= 8 else text)

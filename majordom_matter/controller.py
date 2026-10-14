@@ -20,7 +20,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
-from majordom_matter.ble_backend import MatterServerBLEBackend
+from majordom_matter.ble_backend import MatterServerBLEBackend, ble_url
 from majordom_matter.client import MatterClient
 from majordom_matter.config import MATTER_SERVER
 
@@ -115,9 +115,10 @@ class MatterController(AbstractController):
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
         # matter-server commissions over Bluetooth through the hub's radios, not its own
-        ble_url = self.dependencies.links["matter"].url.removesuffix("/ws") + "/ble"
         ble_backend = MatterServerBLEBackend(
-            ble_url, self.dependencies.ble_discovery_service, self._matter_client_session
+            ble_url(self.dependencies.links["matter"].url),
+            self.dependencies.ble_discovery_service,
+            self._matter_client_session,
         )
         self._background_tasks.append(asyncio.create_task(ble_backend.run()))
 

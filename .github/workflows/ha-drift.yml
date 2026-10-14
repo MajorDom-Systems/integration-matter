@@ -20,10 +20,13 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write # dispatch test.yml on the refresh PR branch
 
 jobs:
   drift:
     runs-on: ubuntu-latest
+    env:
+      REFRESH_BRANCH: chore/ha-harvest-refresh
     steps:
       - uses: actions/checkout@v7
 
@@ -42,10 +45,10 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          poetry run python scripts/check_matter_ha_drift.py --ref dev 2> drift.txt
+          poetry run python scripts/check_matter_ha_drift.py --ref dev 2> "$RUNNER_TEMP/drift.txt"  # outside the checkout: not committed into the PR
           code=$?
           set -e
-          cat drift.txt
+          cat "$RUNNER_TEMP/drift.txt"
           echo "code=${code}" >> "$GITHUB_OUTPUT"
           if [ "$code" -gt 2 ]; then exit "$code"; fi  # real failure, not a drift signal
 
@@ -58,24 +61,33 @@ jobs:
         if: steps.drift.outputs.code != '0'
         uses: peter-evans/create-pull-request@v8
         with:
-          branch: chore/ha-harvest-refresh
+          branch: ${{ env.REFRESH_BRANCH }}
           commit-message: "chore(matter): refresh the vendored HA-matter harvest"
           title: "${{ steps.drift.outputs.code == '2' && '⚠️ HIGH RISK: ' || '' }}Refresh vendored HA-matter harvest"
-          body-path: drift.txt
+          body-path: ${{ runner.temp }}/drift.txt
           labels: ${{ steps.drift.outputs.code == '2' && 'drift,high-risk' || 'drift' }}
           delete-branch: true
 
       - name: Auto-merge the low-risk refresh
         # Only exit 1 (ADD/REMOVE) auto-merges — RECLASSIFY (exit 2) is left open for human review.
-        # Waits for the PR's own checks (test.yml + coverage) and merges only if they pass; a failing
-        # check fails this step and leaves the PR open. Self-contained: no branch protection or
-        # repo "Allow auto-merge" setting required.
+        # A PR opened with GITHUB_TOKEN triggers no `pull_request` workflows (GitHub's anti-recursion
+        # rule), so test.yml is dispatched on the PR branch explicitly — workflow_dispatch is exempt.
+        # Merges only if that run passes; a failing run fails this step and leaves the PR open.
+        # Self-contained: no PAT, branch protection or repo "Allow auto-merge" setting required.
         if: steps.drift.outputs.code == '1' && steps.cpr.outputs.pull-request-number
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.cpr.outputs.pull-request-number }}
+          SHA: ${{ steps.cpr.outputs.pull-request-head-sha }}
         run: |
           set -euo pipefail
-          sleep 30                                   # let the pull_request checks register
-          gh pr checks "$PR" --watch --fail-fast --interval 20
+          gh workflow run test.yml --ref "$REFRESH_BRANCH"
+          run_id=""
+          for _ in $(seq 12); do                     # the dispatched run takes a few seconds to appear
+            sleep 10
+            run_id=$(gh run list --workflow test.yml --event workflow_dispatch --commit "$SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$run_id" ] && break
+          done
+          [ -n "$run_id" ] || { echo "::error::dispatched test.yml run for $SHA never appeared"; exit 1; }
+          gh run watch "$run_id" --exit-status --interval 20
           gh pr merge "$PR" --squash --delete-branch

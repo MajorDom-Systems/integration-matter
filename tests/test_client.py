@@ -1,5 +1,8 @@
 """The controller's matter-server client, in the order matterjs-server sends events."""
 
+from unittest.mock import Mock
+
+from aiohttp import ClientSession
 from matter_server.common.models import EventMessage, EventType
 
 from majordom_matter.controller import MatterClient
@@ -7,7 +10,7 @@ from majordom_matter.testing import load_on_off_light_node
 
 
 def test_an_attribute_update_may_come_before_its_node():
-    client = MatterClient("ws://matter-server/ws", None)
+    client = MatterClient("ws://matter-server/ws", Mock(spec=ClientSession))
     node = load_on_off_light_node()
     client._nodes[node.node_id] = node
     updated = []

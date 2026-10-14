@@ -61,7 +61,7 @@ async def matter_server():
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
-    yield f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}/ble", proxies
+    yield f"http://127.0.0.1:{runner.addresses[0][1]}/ble", proxies
     done.set()
     await runner.cleanup()
 

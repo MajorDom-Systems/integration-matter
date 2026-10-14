@@ -59,27 +59,28 @@ class MatterBLEProxy:
         """Serves matter-server until cancelled, reconnecting whenever it goes away."""
         while True:
             try:
-                async with self._session.ws_connect(self._url) as self._ws:
-                    await self._serve()
+                async with self._session.ws_connect(self._url) as ws:
+                    self._ws = ws
+                    await self._serve(ws)
             except (ClientError, OSError, TimeoutError) as e:
                 logger.debug(f"matter-server Bluetooth proxy endpoint {self._url}: {e}")
             finally:
                 await self._release()
             await asyncio.sleep(_RECONNECT_SEC)
 
-    async def _serve(self):
-        await self._ws.send_json({"type": "hello", "version": 1})
-        if error := (await self._ws.receive_json(timeout=10)).get("error"):
+    async def _serve(self, ws: ClientWebSocketResponse):
+        await ws.send_json({"type": "hello", "version": 1})
+        if error := (await ws.receive_json(timeout=10)).get("error"):
             logger.warning(f"matter-server refused the Bluetooth proxy: {error}")
             return
         logger.info(f"Lending Bluetooth to matter-server at {self._url}")
-        async for message in self._ws:
+        async for message in ws:
             if message.type == WSMsgType.TEXT:
-                self._spawn(self._answer(json.loads(message.data)))
+                self._spawn(self._answer(ws, json.loads(message.data)))
             elif message.type == WSMsgType.BINARY:
                 await self._forward(message.data)  # in order: these are segments of one stream
 
-    async def _answer(self, command: dict):
+    async def _answer(self, ws: ClientWebSocketResponse, command: dict):
         try:
             handler = getattr(self, f"_{command['command']}", None)
             if not handler:
@@ -89,7 +90,7 @@ class MatterBLEProxy:
         except Exception as e:
             error = e.error if isinstance(e, _Failure) else "internal_error"
             reply = {"id": command["id"], "success": False, "error": error, "message": str(e)}
-        await self._ws.send_json(reply)
+        await ws.send_json(reply)
 
     async def _forward(self, frame: bytes):
         opcode, handle = _FRAME.unpack_from(frame)

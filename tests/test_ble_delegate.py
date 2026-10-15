@@ -8,7 +8,7 @@ from aiohttp import ClientSession, web
 from majordom_integration_sdk.discovery import BLEService, GattCharacteristic, GattService
 from majordom_integration_sdk.testing import FakeBLESource
 
-from majordom_matter.ble_backend import MatterServerBLEBackend
+from majordom_matter.ble_delegate import MatterServerBLEDelegate
 
 MATTER = "0000fff6-0000-1000-8000-00805f9b34fb"
 C1, C2 = "18ee2ef5-263d-4559-959f-4f9c429f9d11", "18ee2ef5-263d-4559-959f-4f9c429f9d12"
@@ -85,7 +85,7 @@ async def backend(matter_server, radios):
     ble = BLEService(sources=radios)
     await ble.start()
     async with ClientSession() as session:
-        task = asyncio.create_task(MatterServerBLEBackend(url, ble, session).run())
+        task = asyncio.create_task(MatterServerBLEDelegate(url, ble, session).run())
         ws = await asyncio.wait_for(backends.get(), 5)
         assert await ws.receive_json() == {"type": "hello", "version": 1}
         await ws.send_json({"type": "hello_response", "version": 1})

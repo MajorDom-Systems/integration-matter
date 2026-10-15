@@ -61,9 +61,8 @@ def _gatt(error: str) -> Iterator[None]:
         raise _Failure(error, str(e)) from e
 
 
-class MatterServerBLEBackend:
-    """Provides the hub's BLE transport to matter-server by acting as a WebSocket client of matter-server's ``/ble``
-    endpoint.
+class MatterServerBLEDelegate:
+    """Connects to matter-server's ``/ble`` endpoint and performs its BLE operations through the Hub's BLEService.
 
     It reconnects whenever matter-server goes away. Run one per matter-server.
     """
@@ -285,4 +284,4 @@ class MatterServerBLEBackend:
     def _on_task_done(self, task: asyncio.Task):
         self._tasks.discard(task)
         if not task.cancelled() and (e := task.exception()):
-            logger.debug(f"Bluetooth backend task failed: {e!r}")
+            logger.debug(f"Bluetooth delegate task failed: {e!r}")

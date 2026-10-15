@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from majordom_matter.ble_backend import ble_url
+from majordom_matter.ble_delegate import ble_url
 from majordom_matter.config import MATTER_SERVER
 
 PORTS = SimpleNamespace(api=45812)

@@ -18,7 +18,7 @@ MATTER_SERVER = Service(
             "STORAGE_PATH": "/data",
             "PORT": "{ports.api}",
             "BLE_PROXY": "true",
-        },  # Bluetooth comes from the hub, see ble_backend
+        },  # Bluetooth comes from the hub, see ble_delegate
         "volumes": ["{data}:/data"],
     },
 )

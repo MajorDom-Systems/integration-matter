@@ -20,7 +20,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
-from majordom_matter.ble_backend import MatterServerBLEBackend, ble_url
+from majordom_matter.ble_delegate import MatterServerBLEDelegate, ble_url
 from majordom_matter.client import MatterClient
 from majordom_matter.config import MATTER_SERVER
 
@@ -54,7 +54,7 @@ class MatterController(AbstractController):
     """Bridges the Hub to Matter devices through a Matter controller server (matter-server).
 
     matter-server owns the Matter fabric and commissioning, over the hub's Bluetooth
-    (`MatterServerBLEBackend`) and a Thread border router; this controller adapts it to the
+    (`MatterServerBLEDelegate`) and a Thread border router; this controller adapts it to the
     Hub's AbstractController contract, talking to it over its WebSocket API. On-network devices
     are discovered via matter-server; BLE-only commissionable devices are discovered via the
     Hub's shared BLE service. See readme.md.
@@ -115,12 +115,12 @@ class MatterController(AbstractController):
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
         # matter-server commissions over Bluetooth through the hub's radios, not its own
-        ble_backend = MatterServerBLEBackend(
+        ble_delegate = MatterServerBLEDelegate(
             ble_url(self.dependencies.links["matter"].url),
             self.dependencies.ble_discovery_service,
             self._matter_client_session,
         )
-        self._background_tasks.append(asyncio.create_task(ble_backend.run()))
+        self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
 
         # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
         # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.

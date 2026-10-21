@@ -290,7 +290,7 @@ def test_code_option_offers_the_matter_manual_code_mask(pairing_hint: int | None
     mapper = MatterMapper(lambda s: uuid4(), lambda d, s: uuid4())
     options = mapper.define_credentials_options(1, pairing_hint, is_on_network=is_on_network)
     assert options == [CredentialsType.code]
-    assert options[0].code_mask == "DDDD-DDD-DDDD"
+    assert options[0].mask == "DDDD-DDD-DDDD"
 
 
 async def test_raw_setup_pin_on_network_discovery_commissions_on_network(controller):

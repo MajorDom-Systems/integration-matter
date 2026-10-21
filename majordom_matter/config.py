@@ -18,6 +18,8 @@ MATTER_SERVER = Service(
             "STORAGE_PATH": "/data",
             "PORT": "{ports.api}",
             "BLE_PROXY": "true",
+            # matter.js logs every command's fields at info, the Thread network key included
+            "LOG_LEVEL": "warning",
         },  # Bluetooth comes from the hub, see ble_delegate
         "volumes": ["{data}:/data"],
     },

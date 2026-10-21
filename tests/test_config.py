@@ -22,3 +22,7 @@ def test_provides_its_url_on_the_allocated_port():
 
 def test_ble_url_follows_any_port():
     assert ble_url("ws://127.0.0.1:45812/ws") == "ws://127.0.0.1:45812/ble"
+
+
+def test_keeps_credentials_out_of_its_logs():
+    assert MATTER_SERVER.compose["environment"]["LOG_LEVEL"] == "warning"

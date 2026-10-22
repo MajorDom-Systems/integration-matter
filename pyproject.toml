@@ -1,6 +1,6 @@
 [project]
 name = "majordom-matter"
-version = "0.1.4"
+version = "0.1.5"
 description = "Matter integration for MajorDom — bridges Matter devices into the MajorDom language."
 authors = [
     { name = "Parker Industries" },

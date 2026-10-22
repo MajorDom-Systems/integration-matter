@@ -36,7 +36,7 @@ Issues = "https://github.com/MajorDom-Systems/integration-matter/issues"
 
 [dependency-groups]
 dev = [
-    "poethepoet (>=0.36.0,<1.0.0)",
+    "poethepoet (>=0.49.0,<1.0.0)",
     "ty", "ruff", "pip-audit",
     "pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "pytest-repeat",
     "pytest-benchmark", "pytest-profiling", "pytest-resource-usage", "coverage",

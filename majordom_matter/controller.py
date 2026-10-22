@@ -8,7 +8,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import Need, PeripheralChange
+from majordom_integration_sdk import Need
 from majordom_integration_sdk.controller import AbstractController
 from majordom_integration_sdk.discovery.ble_discovery import BLEDiscoveryInfo, BLEDiscoveryService
 from majordom_integration_sdk.schemas.base import NonEmptyStr
@@ -20,7 +20,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
-from majordom_matter.ble_delegate import MatterServerBLEDelegate, ble_url
+from majordom_matter.ble_delegate import MatterServerBLEDelegate
 from majordom_matter.client import MatterClient
 from majordom_matter.config import MATTERJS_SERVER
 
@@ -60,8 +60,8 @@ class MatterController(AbstractController):
     Hub's shared BLE service. See readme.md.
     """
 
-    # ble is semantic: the hub's BLEService (for discovery and matterjs-server) comes through the SDK, not a link
-    needs = [Need("matter", ["matter-server-ws"]), Need("ble", required=False)]
+    # ble: matterjs-server's BLE proxy, which MatterServerBLEDelegate serves from the hub's BLEService
+    needs = [Need("matter", ["matter-server-ws"]), Need("ble", ["matter-ble-proxy"], required=False)]
     services = [MATTERJS_SERVER]
 
     _matter_client: MatterClient
@@ -115,12 +115,11 @@ class MatterController(AbstractController):
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
         # matterjs-server commissions over Bluetooth through the hub's radios, not its own
-        ble_delegate = MatterServerBLEDelegate(
-            ble_url(self.dependencies.links["matter"].url),
-            self.dependencies.ble_discovery_service,
-            self._matter_client_session,
-        )
-        self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
+        if proxy := self.dependencies.links.get("ble"):
+            ble_delegate = MatterServerBLEDelegate(
+                proxy.url, self.dependencies.ble_discovery_service, self._matter_client_session
+            )
+            self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
 
         # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
         # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.
@@ -129,10 +128,6 @@ class MatterController(AbstractController):
 
         await self._sync_with_server()
         self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
-
-    @override
-    async def peripheral_did_change(self, change: PeripheralChange) -> bool:
-        return change.family == "ble"  # the BLEService follows its adapters itself
 
     async def _sync_with_server(self):
         """Hands matterjs-server the networks and follows the devices on its fabric; on every (re)connect."""

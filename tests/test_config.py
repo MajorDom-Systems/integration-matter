@@ -2,8 +2,10 @@
 
 from types import SimpleNamespace
 
-from majordom_matter.ble_delegate import ble_url
+from majordom_integration_sdk import Endpoint
+
 from majordom_matter.config import MATTERJS_SERVER
+from majordom_matter.controller import MatterController
 
 PORTS = SimpleNamespace(api=45812)
 
@@ -20,8 +22,14 @@ def test_provides_its_url_on_the_allocated_port():
     assert MATTERJS_SERVER.provides[0].url.format(ports=PORTS) == "ws://127.0.0.1:45812/ws"
 
 
-def test_ble_url_follows_any_port():
-    assert ble_url("ws://127.0.0.1:45812/ws") == "ws://127.0.0.1:45812/ble"
+def test_provides_its_ble_proxy_on_the_allocated_port():
+    assert MATTERJS_SERVER.provides[1].url.format(ports=PORTS) == "ws://127.0.0.1:45812/ble"
+
+
+def test_the_controller_binds_the_ble_proxy_not_the_hosts_bluetooth():
+    ble = next(need for need in MatterController.needs if need.family == "ble")
+    assert ble.accepts(MATTERJS_SERVER.provides[1])
+    assert not ble.accepts(Endpoint("ble", "bluez", "hci0"))
 
 
 def test_keeps_credentials_out_of_its_logs():

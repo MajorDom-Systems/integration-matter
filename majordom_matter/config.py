@@ -6,7 +6,10 @@ MATTERJS_SERVER = Service(
     "matterjs-server",
     # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet.
     needs=[Need("ip"), Need("thread", ["otbr-rest"], required=False)],
-    provides=[Endpoint("matter", "matter-server-ws", "ws://127.0.0.1:{ports.api}/ws")],
+    provides=[
+        Endpoint("matter", "matter-server-ws", "ws://127.0.0.1:{ports.api}/ws"),
+        Endpoint("ble", "matter-ble-proxy", "ws://127.0.0.1:{ports.api}/ble"),  # BLE_PROXY
+    ],
     ports={"api": 5580},
     compose={
         # :dev pinned by digest (2026-10-08); bump on purpose

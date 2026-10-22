@@ -12,7 +12,7 @@ from chip.clusters.CHIPClusters import ChipClusters
 from chip.clusters.ClusterObjects import ALL_ATTRIBUTES, ALL_CLUSTERS, ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Types import Nullable, NullValue
 from chip.tlv import TLVReader
-from majordom_integration_sdk.schemas.device import CredentialsType
+from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType
 from majordom_integration_sdk.schemas.parameter import (
     Parameter,
     ParameterDataType,
@@ -107,7 +107,7 @@ class MatterMapper:
         pairing_hint: int | None = None,
         pairing_instruction: str | None = None,
         is_on_network: bool = False,
-    ) -> list[CredentialsType]:
+    ) -> list[CredentialsType | CredentialsOption]:
         """Every credentials type this node's pairing hint bitmap says it supports —
         a device can advertise more than one simultaneously (e.g. QR and a manual code),
         so this returns all of them instead of picking just one."""
@@ -116,7 +116,7 @@ class MatterMapper:
 
         hint = pairing_hint or 0
         instruction = (pairing_instruction or "").lower()
-        options: list[CredentialsType] = []
+        options: list[CredentialsType | CredentialsOption] = []
 
         # Bitmask checks based on the Matter spec pairing hint bitmap.
         if is_on_network:

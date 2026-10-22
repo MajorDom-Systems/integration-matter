@@ -18,7 +18,7 @@ import pytest
 import pytest_asyncio
 from majordom_integration_sdk import Context, Endpoint, Need, PeripheralChange, WifiCredentials
 from majordom_integration_sdk.schemas.command import DeviceCommand
-from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
+from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
 
 from majordom_matter import MatterController
@@ -290,6 +290,7 @@ def test_code_option_offers_the_matter_manual_code_mask(pairing_hint: int | None
     mapper = MatterMapper(lambda s: uuid4(), lambda d, s: uuid4())
     options = mapper.define_credentials_options(1, pairing_hint, is_on_network=is_on_network)
     assert options == [CredentialsType.code]
+    assert isinstance(options[0], CredentialsOption)
     assert options[0].mask == "DDDD-DDD-DDDD"
 
 

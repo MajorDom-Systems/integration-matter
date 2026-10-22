@@ -63,7 +63,7 @@ async def _pair(
     fake = FakeMatterClient(node=node)
     monkeypatch.setattr("majordom_matter.controller.MatterClient", lambda url, session: fake)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")}
     )
     controller = MatterController(deps)
     await controller.start()

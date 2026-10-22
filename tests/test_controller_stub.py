@@ -36,7 +36,7 @@ async def controller(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=FakeMatterServer()))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter")
-    deps = deps.copy(links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")})
+    deps = deps.copy(links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")})
     controller = MatterController(deps)
     await controller.start()
     yield controller, deps.output
@@ -451,7 +451,7 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
 async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")},
+        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")},
         context=Context(wifi=WifiCredentials("home", "secret"), thread_dataset="0e08abcd"),
     )
     controller = MatterController(deps)
@@ -466,7 +466,7 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
 async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")}
     )
     async with deps.make_device_repository() as repo:  # left by a commissioning that failed, or a reset matter-server
         await repo.save(
@@ -526,7 +526,7 @@ async def test_stopping_matter_while_it_reconnects(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")}
     )
     controller = MatterController(deps)
     await controller.start()
@@ -545,7 +545,7 @@ async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypat
 
     monkeypatch.setattr("majordom_matter.controller.MatterClient", GoneAtOnce)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")}
     )
 
     with pytest.raises(MatterConnectionError):
@@ -562,7 +562,7 @@ async def test_a_bluetooth_adapter_coming_or_going_keeps_matter_running(controll
 async def test_stopping_matter_reports_no_error(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "ws", "ws://matter-server/ws")}
+        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")}
     )
     controller = MatterController(deps)
     await controller.start()

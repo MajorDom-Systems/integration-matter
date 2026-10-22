@@ -61,7 +61,7 @@ class MatterController(AbstractController):
     """
 
     # ble is semantic: the hub's BLEService (for discovery and matterjs-server) comes through the SDK, not a link
-    needs = [Need("matter", ["ws"]), Need("ble", required=False)]
+    needs = [Need("matter", ["matter-server-ws"]), Need("ble", required=False)]
     services = [MATTERJS_SERVER]
 
     _matter_client: MatterClient

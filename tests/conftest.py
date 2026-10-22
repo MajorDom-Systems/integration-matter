@@ -129,7 +129,7 @@ async def matter(mvd):
         zeroconf_discovery_service=FakeZeroconfDiscoveryService(),
         ssdp_discovery_service=FakeSSDPDiscoveryService(),
         ble_discovery_service=FakeBLEDiscoveryService(),
-        links={"matter": Endpoint("matter", "ws", matter_server_url)},
+        links={"matter": Endpoint("matter", "matter-server-ws", matter_server_url)},
     )
     controller = MatterController(deps)
     await controller.start()

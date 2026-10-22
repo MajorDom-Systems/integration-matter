@@ -1,9 +1,9 @@
-"""matter-server: the Matter controller service this integration drives over its WebSocket API."""
+"""matterjs-server: the Matter controller service this integration drives over its WebSocket API."""
 
 from majordom_integration_sdk import Endpoint, Need, Service
 
-MATTER_SERVER = Service(
-    "matter-server",
+MATTERJS_SERVER = Service(
+    "matterjs-server",
     # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet.
     needs=[Need("ip"), Need("thread", ["otbr-rest"], required=False)],
     provides=[Endpoint("matter", "ws", "ws://127.0.0.1:{ports.api}/ws")],

@@ -1,7 +1,7 @@
-"""Lends the hub's Bluetooth to matter-server, so commissioning reaches devices through every radio
+"""Lends the hub's Bluetooth to matterjs-server, so commissioning reaches devices through every radio
 `BLEService` hears with — local adapters and ESPHome nodes alike.
 
-matter-server (``BLE_PROXY=true``) takes a Bluetooth client on ``/ble`` and drives it with the
+matterjs-server (``BLE_PROXY=true``) takes a Bluetooth client on ``/ble`` and drives it with the
 BLE proxy protocol v1: https://github.com/matter-js/matterjs-server/blob/main/docs/ble-proxy-protocol.md
 """
 
@@ -62,9 +62,9 @@ def _gatt(error: str) -> Iterator[None]:
 
 
 class MatterServerBLEDelegate:
-    """Connects to matter-server's ``/ble`` endpoint and performs its BLE operations through the Hub's BLEService.
+    """Connects to matterjs-server's ``/ble`` endpoint and performs its BLE operations through the Hub's BLEService.
 
-    It reconnects whenever matter-server goes away. Run one per matter-server.
+    It reconnects whenever matterjs-server goes away. Run one per matterjs-server.
     """
 
     def __init__(self, url: str, ble: BLEService, session: ClientSession):
@@ -76,7 +76,7 @@ class MatterServerBLEDelegate:
         self._tasks: set[asyncio.Task] = set()
 
     async def run(self):
-        """Serves matter-server until cancelled, reconnecting whenever it goes away."""
+        """Serves matterjs-server until cancelled, reconnecting whenever it goes away."""
         delay = _RECONNECT_SEC
         while True:
             try:
@@ -85,22 +85,22 @@ class MatterServerBLEDelegate:
                     if await self._serve(ws):
                         delay = _RECONNECT_SEC
                 reason = "closed"
-            except Exception as e:  # whatever broke, matter-server must get the hub's Bluetooth back
+            except Exception as e:  # whatever broke, matterjs-server must get the hub's Bluetooth back
                 reason = f"failed: {e!r}"
             finally:
                 await self._release()
             log = logger.warning if delay == _RECONNECT_SEC else logger.debug  # once per outage, not every retry
-            log(f"matter-server's /ble endpoint {self._url} {reason}, reconnecting in {delay} s")
+            log(f"matterjs-server's /ble endpoint {self._url} {reason}, reconnecting in {delay} s")
             await asyncio.sleep(delay)
             delay = min(delay * 2, _RECONNECT_MAX_SEC)
 
     async def _serve(self, ws: ClientWebSocketResponse) -> bool:
-        """Serves one connection until it closes; False when matter-server refuses it."""
+        """Serves one connection until it closes; False when matterjs-server refuses it."""
         await ws.send_json({"type": "hello", "version": 1})
         if error := (await ws.receive_json(timeout=10)).get("error"):
-            logger.warning(f"matter-server refused the hub's Bluetooth: {error}")
+            logger.warning(f"matterjs-server refused the hub's Bluetooth: {error}")
             return False
-        logger.info(f"Lending Bluetooth to matter-server at {self._url}")
+        logger.info(f"Lending Bluetooth to matterjs-server at {self._url}")
         async for message in ws:
             if message.type == WSMsgType.TEXT:
                 self._spawn(self._answer(ws, json.loads(message.data)))
@@ -236,7 +236,7 @@ class MatterServerBLEDelegate:
         adv = info.advertisement
         await self._send_event("device_discovered", {
             "address": info.device.address,
-            "connectable": True,  # bleak doesn't say; matter-server ignores devices that aren't
+            "connectable": True,  # bleak doesn't say; matterjs-server ignores devices that aren't
             "name": adv.local_name,
             "rssi": adv.rssi,
             "service_uuids": adv.service_uuids,

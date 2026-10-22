@@ -22,7 +22,7 @@ from matter_server.common.models import CommissionableNodeData, EventType, Matte
 
 from majordom_matter.ble_delegate import MatterServerBLEDelegate, ble_url
 from majordom_matter.client import MatterClient
-from majordom_matter.config import MATTER_SERVER
+from majordom_matter.config import MATTERJS_SERVER
 
 from .exceptions import (
     MatterConnectionError,
@@ -51,18 +51,18 @@ from .model import (
 
 
 class MatterController(AbstractController):
-    """Bridges the Hub to Matter devices through a Matter controller server (matter-server).
+    """Bridges the Hub to Matter devices through a Matter controller server (matterjs-server).
 
-    matter-server owns the Matter fabric and commissioning, over the hub's Bluetooth
+    matterjs-server owns the Matter fabric and commissioning, over the hub's Bluetooth
     (`MatterServerBLEDelegate`) and a Thread border router; this controller adapts it to the
     Hub's AbstractController contract, talking to it over its WebSocket API. On-network devices
-    are discovered via matter-server; BLE-only commissionable devices are discovered via the
+    are discovered via matterjs-server; BLE-only commissionable devices are discovered via the
     Hub's shared BLE service. See readme.md.
     """
 
-    # ble is semantic: the hub's BLEService (for discovery and matter-server) comes through the SDK, not a link
+    # ble is semantic: the hub's BLEService (for discovery and matterjs-server) comes through the SDK, not a link
     needs = [Need("matter", ["ws"]), Need("ble", required=False)]
-    services = [MATTER_SERVER]
+    services = [MATTERJS_SERVER]
 
     _matter_client: MatterClient
     _matter_client_session: ClientSession
@@ -114,7 +114,7 @@ class MatterController(AbstractController):
         listener = await self._connect()
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
-        # matter-server commissions over Bluetooth through the hub's radios, not its own
+        # matterjs-server commissions over Bluetooth through the hub's radios, not its own
         ble_delegate = MatterServerBLEDelegate(
             ble_url(self.dependencies.links["matter"].url),
             self.dependencies.ble_discovery_service,
@@ -135,7 +135,7 @@ class MatterController(AbstractController):
         return change.family == "ble"  # the BLEService follows its adapters itself
 
     async def _sync_with_server(self):
-        """Hands matter-server the networks and follows the devices on its fabric; on every (re)connect."""
+        """Hands matterjs-server the networks and follows the devices on its fabric; on every (re)connect."""
         # Networks new devices get commissioned onto.
         if wifi := self.dependencies.context.wifi:
             await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
@@ -217,7 +217,7 @@ class MatterController(AbstractController):
         await self._matter_client_session.close()
 
     async def _connect(self) -> asyncio.Task:
-        """Connects a fresh client to matter-server; the returned listener runs until matter-server goes away."""
+        """Connects a fresh client to matterjs-server; the returned listener runs until matterjs-server goes away."""
         self._matter_client = MatterClient(self.dependencies.links["matter"].url, self._matter_client_session)
         await self._matter_client.connect()
 
@@ -231,18 +231,18 @@ class MatterController(AbstractController):
             if not init_ready.is_set():
                 listener.cancel()
         if not init_ready.is_set():
-            raise MatterConnectionError("matter-server went away before it was ready")
+            raise MatterConnectionError("matterjs-server went away before it was ready")
         return listener
 
     async def _stay_connected(self, listener: asyncio.Task):
-        """Reconnects whenever matter-server goes away (e.g. its container is recreated) until stop() cancels it,
+        """Reconnects whenever matterjs-server goes away (e.g. its container is recreated) until stop() cancels it,
         so the integration heals by itself instead of being restarted by the hub."""
         try:
             while True:
                 try:
                     await listener
                 except Exception as e:
-                    logging.warning(f"[{self.name}] matter-server listener failed: {e!r}")
+                    logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
                 message = "Lost the connection to the Matter server, reconnecting."
                 await self.dependencies.output.controller_did_encounter_error(self, message, still_running=True)
                 for device_id, available in self._node_availability.items():
@@ -259,9 +259,9 @@ class MatterController(AbstractController):
                         break
                     except Exception as e:
                         listener.cancel()
-                        logging.info(f"[{self.name}] matter-server is not back yet: {e!r}")
+                        logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
                         delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
-                logging.info(f"[{self.name}] reconnected to matter-server")
+                logging.info(f"[{self.name}] reconnected to matterjs-server")
                 for device_id, available in self._node_availability.items():
                     if available:
                         await self.dependencies.output.controller_did_connect_device(self, device_id)
@@ -312,7 +312,7 @@ class MatterController(AbstractController):
         if credentials.value is None:
             raise MatterUnexpectedError("Matter commissioning requires a pairing code, but none was provided")
 
-        # matter-server may run without a Bluetooth adapter; then a non-network_only commission fails
+        # matterjs-server may run without a Bluetooth adapter; then a non-network_only commission fails
         # with "Bluetooth commissioning is not available", so only BLE discoveries may use BLE.
         network_only = discovery.transport != "BLE"
 
@@ -396,7 +396,7 @@ class MatterController(AbstractController):
 
     async def unpair(self, device: MatterDevice):
         client = self._require_matter_client()
-        # a device that never finished commissioning (or that matter-server lost) has no node to remove
+        # a device that never finished commissioning (or that matterjs-server lost) has no node to remove
         if any(node.node_id == device.node_id for node in client.get_nodes()):
             await client.remove_node(device.node_id)
 
@@ -497,11 +497,11 @@ class MatterController(AbstractController):
     # -------------------------------------------------------------------------
 
     async def _matter_discovery_loop(self, interval: int = 5):
-        # On-network (mDNS) discovery is polled from matter-server rather than routed through the
-        # Hub's shared Zeroconf service on purpose: matter-server already parses the Matter `_matterc`
+        # On-network (mDNS) discovery is polled from matterjs-server rather than routed through the
+        # Hub's shared Zeroconf service on purpose: matterjs-server already parses the Matter `_matterc`
         # TXT records into clean, structured CommissionableNodeData (discriminator, vendor/product,
         # commissioning mode, pairing hints). Re-deriving that on the raw Zeroconf service would just
-        # duplicate matter-server's parser. BLE-only devices, which mDNS can't see, ARE discovered via
+        # duplicate matterjs-server's parser. BLE-only devices, which mDNS can't see, ARE discovered via
         # the Hub's shared BLE service instead (see the BLE discovery section below) — so the "our
         # discovery + SDK for pairing" split is used exactly where it adds value.
         while True:

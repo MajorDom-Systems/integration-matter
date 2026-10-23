@@ -24,7 +24,7 @@ from matter_server.common.models import CommissionableNodeData, EventType, Matte
 
 from majordom_matter.ble_delegate import MatterServerBLEDelegate
 from majordom_matter.client import MatterClient
-from majordom_matter.config import MATTERJS_SERVER
+from majordom_matter.config import MATTERJS_SERVER, MatterSettings
 
 from .exceptions import (
     MatterConnectionError,
@@ -66,6 +66,7 @@ class MatterController(AbstractController):
     # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
     needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], required=False)]
     services = [MATTERJS_SERVER]
+    settings = MatterSettings
 
     _matter_client: MatterClient
     _matter_client_session: ClientSession
@@ -121,7 +122,11 @@ class MatterController(AbstractController):
         # discovery loop above can't see them). None without the router (no Bluetooth on this hub).
         self._ble_addresses: dict[UUID, set[str]] = {}  # discovery_id -> live BLE addresses
         self._ble_cancel = None
-        if router := self.peripherals.instance("ble"):
+        if self._ble_mode == "direct":
+            # matterjs-server holds an adapter of its own and scans inside commission_with_code; it can't list
+            # commissionable BLE devices, so one generic discovery takes the pairing code
+            await self._offer_commissioning_by_code()
+        elif router := self.peripherals.instance("ble"):
             # matterjs-server commissions over Bluetooth through the hub's radios, not its own
             ble_delegate = MatterServerBLEDelegate(f"{self._server_url}/ble", router, self._matter_client_session)
             self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
@@ -211,6 +216,11 @@ class MatterController(AbstractController):
             return
         await self._matter_client.disconnect()
         await self._matter_client_session.close()
+
+    @property
+    def _ble_mode(self) -> str:
+        settings = self.platform.settings
+        return settings.ble_mode if isinstance(settings, MatterSettings) else "router"
 
     @property
     def _server_url(self) -> str:
@@ -325,6 +335,8 @@ class MatterController(AbstractController):
         commission_node = await self._commission(str(credentials.value), network_only=network_only)
 
         self._majordom_descoveries.pop(discovery.id)
+        if discovery.id == self._by_code_id:
+            await self._offer_commissioning_by_code()  # the next device is added the same way
         node = self._matter_client.get_node(commission_node.node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
@@ -535,7 +547,33 @@ class MatterController(AbstractController):
         await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
-    # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP
+    # Device -> Hub: commissioning by code — ble_mode "direct", matterjs-server holds the adapter
+    # -------------------------------------------------------------------------
+
+    @property
+    def _by_code_id(self) -> UUID:
+        return self._mapper.discovery_uuid("matter-ble-by-code")
+
+    async def _offer_commissioning_by_code(self):
+        """One discovery to pair with a manual pairing code or QR: matterjs-server finds the device over Bluetooth by
+        the code's discriminator. Like any discovery, the Hub seeds its device row under this id when pairing starts,
+        and pair_device renames it to the commissioned node's."""
+        discovery = Discovery(
+            id=self._by_code_id,
+            integration=NonEmptyStr(self.name),
+            expected_credentials_options=[CredentialsType.code.with_mask("DDDD-DDD-DDDD"), CredentialsType.qr],
+            expiration=None,
+            transport=NonEmptyStr("BLE"),
+            device_name=NonEmptyStr("Matter device (enter its pairing code)"),
+            device_manufacturer=None,
+            device_category=None,
+            device_icon=None,
+        )
+        self._majordom_descoveries[discovery.id] = discovery
+        await self.platform.output.controller_did_receive_discovery(self, discovery)
+
+    # -------------------------------------------------------------------------
+    # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP (ble_mode "router")
     # -------------------------------------------------------------------------
 
     async def ble_did_discover_device(self, ble: BLERouter, info: BLEDiscoveryInfo):

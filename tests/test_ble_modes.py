@@ -1,0 +1,114 @@
+"""Bluetooth for commissioning: through the hub's router (the default), or matterjs-server's own adapter ("direct")."""
+
+import asyncio
+import tempfile
+from functools import partial
+from pathlib import Path
+from typing import Literal, cast
+from uuid import UUID
+
+import pytest
+from majordom_integration_sdk import Endpoint
+from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
+from majordom_integration_sdk.testing import (
+    FakeBLERouter,
+    FakeBLESource,
+    RecordingControllerOutput,
+    build_test_platform,
+)
+
+from majordom_matter import MatterController
+from majordom_matter.config import MATTERJS_SERVER, MatterSettings
+from majordom_matter.model import MatterDeviceIntegrationData, MatterDeviceState
+from majordom_matter.testing import FakeMatterClient, FakeMatterServer
+
+SERVER = Endpoint("matter", "matter-server", "ws://matter-server")
+COMMISSIONABLE = "0000fff6-0000-1000-8000-00805f9b34fb"
+
+
+@pytest.fixture
+def fake_server(monkeypatch):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=FakeMatterServer()))
+    monkeypatch.setattr("majordom_matter.controller.MatterServerBLEDelegate.run", lambda self: asyncio.sleep(3600))
+
+
+async def started(router: FakeBLERouter | None, mode: Literal["router", "direct"] = "router") -> MatterController:
+    platform = build_test_platform(Path(tempfile.mkdtemp()), integration="Matter").copy(
+        settings=MatterSettings(ble_mode=mode)
+    )
+    peripherals = {"matter": SERVER} | ({"ble": router.endpoint} if router else {})
+    controller = MatterController(platform, peripherals)
+    await controller.start()
+    return controller
+
+
+def by_ble(controller: MatterController) -> list[str]:
+    return [d.device_name for d in controller.discoveries.values() if d.transport == "BLE"]
+
+
+async def test_through_the_router_it_lists_the_devices_waiting_over_bluetooth(fake_server):
+    radio = FakeBLESource("hci0")
+    router = FakeBLERouter([radio])
+    await router.start()
+    controller = await started(router)
+
+    # opcode 0, discriminator 0xF00, vendor 0xFFF1, product 0x8000
+    radio.advertise("AA", local_name="bulb", service_data={COMMISSIONABLE: bytes([0, 0, 0x0F, 0xF1, 0xFF, 0, 0x80, 0])})
+    await asyncio.sleep(0.05)
+    assert by_ble(controller) == ["bulb"]
+    await controller.stop()
+    await router.stop()
+
+
+async def test_without_the_router_it_hears_no_bluetooth(fake_server):
+    controller = await started(None)
+    assert by_ble(controller) == []
+    await controller.stop()
+
+
+async def test_direct_it_takes_a_pairing_code_for_matterjs_server_to_find_the_device(fake_server):
+    radio = FakeBLESource("hci0")
+    router = FakeBLERouter([radio])
+    await router.start()
+    controller = await started(router, "direct")
+    output = cast(RecordingControllerOutput, controller.platform.output)
+
+    assert by_ble(controller) == ["Matter device (enter its pairing code)"]
+    radio.advertise("AA", local_name="bulb", service_data={COMMISSIONABLE: bytes([0, 0, 0x0F, 0xF1, 0xFF, 0, 0x80, 0])})
+    await asyncio.sleep(0.05)
+    assert by_ble(controller) == ["Matter device (enter its pairing code)"]  # the router isn't used
+
+    (by_code,) = (d for d in controller.discoveries.values() if d.transport == "BLE")
+    async with controller.platform.make_device_repository() as repo:  # what the Hub seeds when pairing starts
+        await repo.save(
+            MatterDeviceState(
+                id=by_code.id,
+                name="Bulb",
+                room_id=UUID(int=1),
+                transport="BLE",
+                integration="Matter",
+                manufacturer=None,
+                parameters=[],
+                integration_data=MatterDeviceIntegrationData(node_id=0),
+            )  # fmt: skip
+        )
+    await controller.pair_device(by_code, ProvidedCredentials(type=CredentialsType.code, value="3497-011-2332"))
+
+    assert output.connected_devices
+    assert by_code.id in controller.discoveries  # offered again for the next device
+    assert [d.id for d in output.received_discoveries].count(by_code.id) == 2
+    await controller.stop()
+    await router.stop()
+
+
+def test_matterjs_server_proxies_bluetooth_unless_it_got_an_adapter():
+    ble = next(need for need in MATTERJS_SERVER.needs if need.family == "ble")
+    assert ble.dialects == ["bluez"] and not ble.required
+    environment = MATTERJS_SERVER.compose["environment"]
+    assert environment["BLE_PROXY"] == "{peripherals.ble.url:!true}"
+    assert environment["BLUETOOTH_ADAPTER"] == "{peripherals.ble.params[index]}"
+
+
+def test_the_router_is_the_default():
+    assert MatterSettings().ble_mode == "router"
+    assert MatterController.settings is MatterSettings

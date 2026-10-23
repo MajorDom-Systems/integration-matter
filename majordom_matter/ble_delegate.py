@@ -1,5 +1,5 @@
 """Lends the hub's Bluetooth to matterjs-server, so commissioning reaches devices through every radio
-`BLEService` hears with — local adapters and ESPHome nodes alike.
+the Bluetooth router (``ble/router``) hears with — local adapters and ESPHome nodes alike.
 
 matterjs-server (``BLE_PROXY=true``) takes a Bluetooth client on ``/ble`` and drives it with the
 BLE proxy protocol v1: https://github.com/matter-js/matterjs-server/blob/main/docs/ble-proxy-protocol.md
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
-from majordom_integration_sdk.discovery import BLEConnection, BLEDiscoveryInfo, BLEMatcher, BLEService
+from majordom_integration_sdk.capabilities import BLEConnection, BLEDiscoveryInfo, BLEMatcher, BLERouter
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +58,12 @@ def _gatt(error: str) -> Iterator[None]:
 
 
 class MatterServerBLEDelegate:
-    """Connects to matterjs-server's ``/ble`` endpoint and performs its BLE operations through the Hub's BLEService.
+    """Connects to matterjs-server's ``/ble`` endpoint and performs its BLE operations through the Bluetooth router.
 
     It reconnects whenever matterjs-server goes away. Run one per matterjs-server.
     """
 
-    def __init__(self, url: str, ble: BLEService, session: ClientSession):
+    def __init__(self, url: str, ble: BLERouter, session: ClientSession):
         self._url, self._ble, self._session = url, ble, session
         self._ws: ClientWebSocketResponse | None = None
         self._peripherals: dict[int, _Peripheral] = {}
@@ -228,7 +228,7 @@ class MatterServerBLEDelegate:
 
     # Events
 
-    async def ble_did_discover_device(self, ble: BLEService, info: BLEDiscoveryInfo):
+    async def ble_did_discover_device(self, ble: BLERouter, info: BLEDiscoveryInfo):
         adv = info.advertisement
         await self._send_event("device_discovered", {
             "address": info.device.address,
@@ -242,7 +242,7 @@ class MatterServerBLEDelegate:
 
     ble_did_update_device = ble_did_discover_device
 
-    async def ble_did_remove_device(self, ble: BLEService, info: BLEDiscoveryInfo): ...
+    async def ble_did_remove_device(self, ble: BLERouter, info: BLEDiscoveryInfo): ...
 
     def _notify(self, connection_handle: int, data: bytes):
         if self._ws and not self._ws.closed:

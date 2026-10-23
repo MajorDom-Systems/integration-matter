@@ -27,7 +27,7 @@ from majordom_integration_sdk import Endpoint
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterVisibility, next_main_parameter_value
-from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_dependencies
+from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 from matter_server.client.models.node import MatterNode
 from matter_server.common.helpers.util import dataclass_from_dict
 from matter_server.common.models import MatterNodeData
@@ -38,6 +38,8 @@ from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, Mat
 from majordom_matter.testing import _FIXTURE, FakeMatterClient
 
 ENDPOINT = 13
+
+SERVER = {"matter": Endpoint("matter", "matter-server", "ws://matter-server")}
 
 
 def _node_with(cluster_id: int, attributes: dict[int, Any], accepted_commands: list[int]) -> MatterNode:
@@ -62,10 +64,8 @@ async def _pair(
 ) -> tuple[MatterController, FakeMatterClient, MatterDevice, MatterDeviceState]:
     fake = FakeMatterClient(node=node)
     monkeypatch.setattr("majordom_matter.controller.MatterClient", lambda url, session: fake)
-    deps = build_test_dependencies(documents_folder=Path(tempfile.mkdtemp()), integration="Matter").copy(
-        links={"matter": Endpoint("matter", "matter-server-ws", "ws://matter-server/ws")}
-    )
-    controller = MatterController(deps)
+    deps = build_test_platform(documents_folder=Path(tempfile.mkdtemp()), integration="Matter")
+    controller = MatterController(deps, SERVER)
     await controller.start()
     async with asyncio.timeout(5):
         while not controller.discoveries:

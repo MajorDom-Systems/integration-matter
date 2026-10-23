@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import inspect
 import logging
+from collections.abc import Mapping
 from typing import override
 from uuid import UUID
 
@@ -9,8 +10,9 @@ from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
 from majordom_integration_sdk import Need
-from majordom_integration_sdk.controller import AbstractController
-from majordom_integration_sdk.discovery.ble_discovery import BLEDiscoveryInfo, BLEDiscoveryService
+from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
+from majordom_integration_sdk.controller import AbstractController, Platform
+from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
@@ -57,11 +59,12 @@ class MatterController(AbstractController):
     (`MatterServerBLEDelegate`) and a Thread border router; this controller adapts it to the
     Hub's AbstractController contract, talking to it over its WebSocket API. On-network devices
     are discovered via matterjs-server; BLE-only commissionable devices are discovered via the
-    Hub's shared BLE service. See readme.md.
+    Bluetooth router. See readme.md.
     """
 
-    # ble: matterjs-server's BLE proxy, which MatterServerBLEDelegate serves from the hub's BLEService
-    needs = [Need("matter", ["matter-server-ws"]), Need("ble", ["matter-ble-proxy"], required=False)]
+    # matter: matterjs-server's base URL (its API at /ws, its BLE proxy at /ble);
+    # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
+    needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], required=False)]
     services = [MATTERJS_SERVER]
 
     _matter_client: MatterClient
@@ -72,14 +75,14 @@ class MatterController(AbstractController):
     # Matter commissionable BLE service (spec 5.4.2.5.6) — devices in commissioning mode advertise
     # this service + its service-data payload. discover_commissionable_nodes only surfaces IP/mDNS
     # devices, so BLE-only devices (a factory-fresh bulb not yet on any network) are discovered here
-    # via the shared BLE scanner instead.
+    # via the Bluetooth router instead.
     _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
 
-    def __init__(self, dependencies: AbstractController.Dependencies):
-        super().__init__(dependencies)
+    def __init__(self, platform: Platform, peripherals: Mapping[str, Bound] | None = None):
+        super().__init__(platform, peripherals)
         # Instance state (not class-level): the mapper is wired with the framework's UUID
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
@@ -114,17 +117,15 @@ class MatterController(AbstractController):
         listener = await self._connect()
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
-        # matterjs-server commissions over Bluetooth through the hub's radios, not its own
-        if proxy := self.dependencies.links.get("ble"):
-            ble_delegate = MatterServerBLEDelegate(
-                proxy.url, self.dependencies.ble_discovery_service, self._matter_client_session
-            )
-            self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
-
         # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
-        # discovery loop above can't see them). No-op in virtual mode where the BLE service is off.
+        # discovery loop above can't see them). None without the router (no Bluetooth on this hub).
         self._ble_addresses: dict[UUID, set[str]] = {}  # discovery_id -> live BLE addresses
-        self._ble_cancel = self.dependencies.ble_discovery_service.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
+        self._ble_cancel = None
+        if router := self.peripherals.instance("ble"):
+            # matterjs-server commissions over Bluetooth through the hub's radios, not its own
+            ble_delegate = MatterServerBLEDelegate(f"{self._server_url}/ble", router, self._matter_client_session)
+            self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
+            self._ble_cancel = router.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
 
         await self._sync_with_server()
         self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
@@ -132,14 +133,14 @@ class MatterController(AbstractController):
     async def _sync_with_server(self):
         """Hands matterjs-server the networks and follows the devices on its fabric; on every (re)connect."""
         # Networks new devices get commissioned onto.
-        if wifi := self.dependencies.context.wifi:
+        if wifi := self.platform.context.wifi:
             await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
-        if dataset := self.dependencies.context.thread_dataset:
+        if dataset := self.platform.context.thread_dataset:
             await self._matter_client.set_thread_operational_dataset(dataset)
 
         device_nodes: list[int] = []
         nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
-        async with self.dependencies.make_device_repository() as device_repository:
+        async with self.platform.make_device_repository() as device_repository:
             for device in await device_repository.get_all(as_=MatterDevice):
                 if node := nodes.get(device.integration_data.node_id):
                     self._subscription(device.id, node)
@@ -165,7 +166,7 @@ class MatterController(AbstractController):
                     device_icon=None,
                 )
                 self._majordom_descoveries[discovery_id] = discovery
-                await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+                await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     async def stop(self):
         self._majordom_descoveries.clear()
@@ -211,9 +212,13 @@ class MatterController(AbstractController):
         await self._matter_client.disconnect()
         await self._matter_client_session.close()
 
+    @property
+    def _server_url(self) -> str:
+        return self.peripherals.endpoint("matter").url.rstrip("/")
+
     async def _connect(self) -> asyncio.Task:
         """Connects a fresh client to matterjs-server; the returned listener runs until matterjs-server goes away."""
-        self._matter_client = MatterClient(self.dependencies.links["matter"].url, self._matter_client_session)
+        self._matter_client = MatterClient(f"{self._server_url}/ws", self._matter_client_session)
         await self._matter_client.connect()
 
         init_ready = asyncio.Event()
@@ -239,10 +244,10 @@ class MatterController(AbstractController):
                 except Exception as e:
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
                 message = "Lost the connection to the Matter server, reconnecting."
-                await self.dependencies.output.controller_did_encounter_error(self, message, still_running=True)
+                await self.platform.output.controller_did_encounter_error(self, message, still_running=True)
                 for device_id, available in self._node_availability.items():
                     if available:
-                        await self.dependencies.output.controller_did_lose_device(self, device_id)
+                        await self.platform.output.controller_did_lose_device(self, device_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
                 delay = self._RECONNECT_DELAY
@@ -259,7 +264,7 @@ class MatterController(AbstractController):
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
                 for device_id, available in self._node_availability.items():
                     if available:
-                        await self.dependencies.output.controller_did_connect_device(self, device_id)
+                        await self.platform.output.controller_did_connect_device(self, device_id)
         finally:
             listener.cancel()
 
@@ -323,7 +328,7 @@ class MatterController(AbstractController):
         node = self._matter_client.get_node(commission_node.node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
-        async with self.dependencies.make_device_repository() as device_repository:
+        async with self.platform.make_device_repository() as device_repository:
             device = await device_repository.state(discovery.id, MatterDeviceState)
             assert device
             device.id = device_id
@@ -385,7 +390,7 @@ class MatterController(AbstractController):
 
             await device_repository.save(device, discovery.id)
 
-        await self.dependencies.output.controller_did_connect_device(self, device_id)
+        await self.platform.output.controller_did_connect_device(self, device_id)
         self._subscription(device_id, node)
         return device_id
 
@@ -426,7 +431,7 @@ class MatterController(AbstractController):
                         )
                     )
 
-        await self.dependencies.output.controller_did_receive_events(self, events)
+        await self.platform.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
         try:
@@ -473,7 +478,7 @@ class MatterController(AbstractController):
                 raise
 
             exception_class, message = match
-            async with self.dependencies.make_device_repository() as device_repository:
+            async with self.platform.make_device_repository() as device_repository:
                 device_state = await device_repository.state(device.id, MatterDeviceState)
                 if device_state is not None:
                     # state() returns None only if the device was unpaired/removed out from under us;
@@ -497,7 +502,7 @@ class MatterController(AbstractController):
         # TXT records into clean, structured CommissionableNodeData (discriminator, vendor/product,
         # commissioning mode, pairing hints). Re-deriving that on the raw Zeroconf service would just
         # duplicate matterjs-server's parser. BLE-only devices, which mDNS can't see, ARE discovered via
-        # the Hub's shared BLE service instead (see the BLE discovery section below) — so the "our
+        # the Bluetooth router instead (see the BLE discovery section below) — so the "our
         # discovery + SDK for pairing" split is used exactly where it adds value.
         while True:
             try:
@@ -527,19 +532,19 @@ class MatterController(AbstractController):
             device_icon=None,
         )
         self._majordom_descoveries[discovery_id] = discovery
-        await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+        await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
     # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP
     # -------------------------------------------------------------------------
 
-    async def ble_did_discover_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
+    async def ble_did_discover_device(self, ble: BLERouter, info: BLEDiscoveryInfo):
         await self._matter_did_discover_ble(info)
 
-    async def ble_did_update_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
+    async def ble_did_update_device(self, ble: BLERouter, info: BLEDiscoveryInfo):
         await self._matter_did_discover_ble(info)
 
-    async def ble_did_remove_device(self, ble: BLEDiscoveryService, info: BLEDiscoveryInfo):
+    async def ble_did_remove_device(self, ble: BLERouter, info: BLEDiscoveryInfo):
         # Intentionally keep the discovery. Commissionable devices rotate their BLE address while the
         # window is open (~minutes), so the scanner's short not-seen eviction (~11s) fires constantly
         # even while the device is very much present — dropping the discovery here would race
@@ -569,7 +574,7 @@ class MatterController(AbstractController):
             device_icon=None,
         )
         self._majordom_descoveries[discovery_id] = discovery
-        await self.dependencies.output.controller_did_receive_discovery(self, discovery)
+        await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     @staticmethod
     def _parse_commissionable_ble(info: BLEDiscoveryInfo) -> tuple[int, int, int] | None:
@@ -639,7 +644,7 @@ class MatterController(AbstractController):
                     cluster_id, attribute_id, self._mapper.parse_raw_attribute(cluster_id, attribute_id, new_value)
                 ),
             )
-            asyncio.create_task(self.dependencies.output.controller_did_receive_events(self, [event]))
+            asyncio.create_task(self.platform.output.controller_did_receive_events(self, [event]))
 
         return callback
 
@@ -651,9 +656,9 @@ class MatterController(AbstractController):
                 return
             self._node_availability[device_id] = is_available
             if is_available:
-                asyncio.create_task(self.dependencies.output.controller_did_connect_device(self, device_id))
+                asyncio.create_task(self.platform.output.controller_did_connect_device(self, device_id))
             else:
-                asyncio.create_task(self.dependencies.output.controller_did_lose_device(self, device_id))
+                asyncio.create_task(self.platform.output.controller_did_lose_device(self, device_id))
 
         return callback
 

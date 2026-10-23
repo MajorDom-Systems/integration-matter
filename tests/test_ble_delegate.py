@@ -5,8 +5,8 @@ import struct
 
 import pytest
 from aiohttp import ClientSession, web
-from majordom_integration_sdk.discovery import BLEService, GattCharacteristic, GattService
-from majordom_integration_sdk.testing import FakeBLESource
+from majordom_integration_sdk.capabilities import GattCharacteristic, GattService
+from majordom_integration_sdk.testing import FakeBLERouter, FakeBLESource
 
 from majordom_matter.ble_delegate import MatterServerBLEDelegate
 
@@ -82,7 +82,7 @@ def radios() -> list[FakeBLESource]:
 async def backend(matter_server, radios):
     url, backends = matter_server
     radio = radios[0]
-    ble = BLEService(sources=radios)
+    ble = FakeBLERouter(sources=radios)
     await ble.start()
     async with ClientSession() as session:
         task = asyncio.create_task(MatterServerBLEDelegate(url, ble, session).run())

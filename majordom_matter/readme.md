@@ -19,8 +19,8 @@ hub discovers, commissions, and controls devices through it.
 
 - **Discovery** runs over two transports. On-network (mDNS) devices come from
   matter-server's `discover_commissionable_nodes()`; BLE-only commissionable devices (a
-  factory-fresh device not yet on any network) are found via the Hub's shared
-  **BLE discovery service** and matched by their commissioning identity. matter-server is
+  factory-fresh device not yet on any network) are found via the hub's
+  **Bluetooth router** (`ble/router`) and matched by their commissioning identity. matter-server is
   kept for on-network discovery because it already parses the Matter TXT records into clean
   structured data (duplicating that on the raw Zeroconf service would add a second parser
   and, for BLE, a second scanner contending with the chip stack during commissioning).

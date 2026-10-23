@@ -18,20 +18,15 @@ import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
 from majordom_integration_sdk import Endpoint
-from majordom_integration_sdk.controller import AbstractController
+from majordom_integration_sdk.controller import Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
-from majordom_integration_sdk.testing import (
-    FakeBLEDiscoveryService,
-    FakeSSDPDiscoveryService,
-    FakeZeroconfDiscoveryService,
-    RecordingControllerOutput,
-)
+from majordom_integration_sdk.testing import RecordingControllerOutput
 from matter_server.client import MatterClient
 
 from majordom_matter import MatterController
 
 # The matter-server the tests run against.
-matter_server_url = os.environ.get("MATTER_SERVER_URL", "ws://localhost:5580/ws")
+matter_server_url = os.environ.get("MATTER_SERVER_URL", "ws://localhost:5580")  # the base URL: /ws, /ble
 
 BIN_DIR = Path(__file__).parent / "mvd"
 _MVD_LIVENESS_CHECK_S = 0.3
@@ -87,7 +82,7 @@ async def _stop_mvd(proc: subprocess.Popen) -> None:
 async def _unpair_all() -> None:
     """Remove every node from matter-server so each test starts from a clean fabric."""
     session = ClientSession()
-    client = MatterClient(matter_server_url, session)
+    client = MatterClient(f"{matter_server_url}/ws", session)
     try:
         await client.connect()
         event = asyncio.Event()
@@ -122,16 +117,10 @@ async def matter(mvd):
     """Started MatterController (connected to matter-server) + recording output + repository."""
     repository = DeviceRepositoryMemory(integration="Matter")
     output = RecordingControllerOutput()
-    deps = AbstractController.Dependencies(
-        output=output,
-        make_device_repository=repository.session,
-        documents_folder=Path(tempfile.mkdtemp()),
-        zeroconf_discovery_service=FakeZeroconfDiscoveryService(),
-        ssdp_discovery_service=FakeSSDPDiscoveryService(),
-        ble_discovery_service=FakeBLEDiscoveryService(),
-        links={"matter": Endpoint("matter", "matter-server-ws", matter_server_url)},
+    platform = Platform(
+        output=output, make_device_repository=repository.session, documents_folder=Path(tempfile.mkdtemp())
     )
-    controller = MatterController(deps)
+    controller = MatterController(platform, {"matter": Endpoint("matter", "matter-server", matter_server_url)})
     await controller.start()
     yield controller, output, repository, mvd
     await controller.stop()

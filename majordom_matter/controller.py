@@ -9,7 +9,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import Need
+from majordom_integration_sdk import IntegrationError, Need
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.peripherals import Bound
@@ -253,8 +253,10 @@ class MatterController(AbstractController):
                     await listener
                 except Exception as e:
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
-                message = "Lost the connection to the Matter server, reconnecting."
-                await self.platform.output.controller_did_encounter_error(self, message, still_running=True)
+                error = IntegrationError(
+                    "server-unreachable", "Lost the connection to the Matter server, reconnecting."
+                )
+                await self.platform.output.controller_did_encounter_error(self, error)
                 for device_id, available in self._node_availability.items():
                     if available:
                         await self.platform.output.controller_did_lose_device(self, device_id)
@@ -272,6 +274,7 @@ class MatterController(AbstractController):
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
                         delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
+                await self.platform.output.controller_did_resolve_error(self, "server-unreachable")
                 for device_id, available in self._node_availability.items():
                     if available:
                         await self.platform.output.controller_did_connect_device(self, device_id)

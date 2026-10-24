@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from majordom_integration_sdk import Context, Endpoint, WifiCredentials
+from majordom_integration_sdk import Context, Endpoint, IntegrationError, WifiCredentials
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
@@ -512,7 +512,8 @@ async def test_matter_reconnects_once_a_lost_matter_server_is_back(controller):
     await asyncio.sleep(0.1)  # a few failed attempts
     lost.server.restore()
     await _wait(lambda: output.connected_devices == [device_id])
-    assert [still_running for _, still_running in output.errors] == [True]
+    lost_server = IntegrationError("server-unreachable", "Lost the connection to the Matter server, reconnecting.")
+    assert output.error_log == [lost_server, "server-unreachable"]  # reported, then resolved
 
     output.events.clear()
     cast(FakeMatterClient, ctrl._matter_client).fire_attribute_update("13/6/0", True)
@@ -531,7 +532,7 @@ async def test_stopping_matter_while_it_reconnects(monkeypatch):
     await _wait(lambda: bool(output.errors))
     await asyncio.sleep(0.1)  # a few failed attempts
     await asyncio.wait_for(controller.stop(), 2)
-    assert [still_running for _, still_running in output.errors] == [True]
+    assert list(output.errors) == ["server-unreachable"] and output.errors["server-unreachable"].still_running
 
 
 async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypatch):
@@ -553,4 +554,4 @@ async def test_stopping_matter_reports_no_error(monkeypatch):
     await controller.start()
     await controller.stop()
     await asyncio.sleep(0.1)
-    assert cast(RecordingControllerOutput, deps.output).errors == []
+    assert cast(RecordingControllerOutput, deps.output).error_log == []

@@ -3,13 +3,14 @@
 import asyncio
 import json
 import tempfile
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID
 
 import pytest
-from majordom_integration_sdk import Endpoint
+from majordom_integration_sdk import Endpoint, Peripherals
 from majordom_integration_sdk.runtime import Runtime
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import (
@@ -35,11 +36,13 @@ def fake_server(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterServerBLEDelegate.run", lambda self: asyncio.sleep(3600))
 
 
-async def started(router: FakeBLERouter | None, mode: Literal["router", "direct"] = "router") -> MatterController:
+async def started(
+    router: FakeBLERouter | None, mode: Literal["router", "direct"] = "router", server: Endpoint = SERVER
+) -> MatterController:
     platform = build_test_platform(Path(tempfile.mkdtemp()), integration="Matter").copy(
         settings=MatterSettings(ble_mode=mode)
     )
-    peripherals = {"matter": SERVER} | ({"ble": router.endpoint} if router else {})
+    peripherals = {"matter": server} | ({"ble": router.endpoint} if router else {})
     controller = MatterController(platform, peripherals)
     await controller.start()
     return controller
@@ -102,6 +105,44 @@ async def test_direct_it_takes_a_pairing_code_for_matterjs_server_to_find_the_de
     assert [d.id for d in output.received_discoveries].count(by_code.id) == 2
     await controller.stop()
     await router.stop()
+
+
+def errors(controller: MatterController) -> list[str]:
+    return list(cast(RecordingControllerOutput, controller.platform.output).errors)
+
+
+@pytest.mark.parametrize("mode", ["router", "direct"])
+async def test_direct_without_an_adapter_says_to_reserve_one_or_use_the_router(fake_server, mode):
+    controller = await started(None, mode, replace(SERVER, params={"adapter": ""}))
+    if mode == "router":
+        assert errors(controller) == []
+    else:
+        (error,) = cast(RecordingControllerOutput, controller.platform.output).errors.values()
+        assert error.id == "ble-adapter-not-reserved" and error.still_running
+        assert "Reserve an adapter for matterjs-server, or set Bluetooth to router" in error.message
+    await controller.stop()
+
+
+async def test_direct_with_an_adapter_or_a_server_of_its_own_says_nothing(fake_server):
+    for server in (replace(SERVER, params={"adapter": "hci0"}), SERVER):  # SERVER: pinned, its Bluetooth unknown
+        controller = await started(None, "direct", server)
+        assert errors(controller) == []
+        await controller.stop()
+
+
+@pytest.mark.parametrize("fix", ["adapter", "mode"])
+async def test_a_bound_adapter_or_the_router_resolves_the_warning_on_restart(fake_server, fix):
+    controller = await started(None, "direct", replace(SERVER, params={"adapter": ""}))
+    await controller.stop()
+    # what the Hub hands over before it restarts the controller
+    if fix == "adapter":
+        controller.peripherals = Peripherals({"matter": replace(SERVER, params={"adapter": "hci0"})})
+    else:
+        controller.platform = controller.platform.copy(settings=MatterSettings(ble_mode="router"))
+    await controller.start()
+    assert errors(controller) == []
+    assert cast(RecordingControllerOutput, controller.platform.output).error_log[-1] == "ble-adapter-not-reserved"
+    await controller.stop()
 
 
 async def matterjs_server(tmp_path: Path, monkeypatch, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:

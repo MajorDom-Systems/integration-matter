@@ -79,6 +79,8 @@ class MatterController(AbstractController):
     # via the Bluetooth router instead.
     _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
+    _ADAPTER_NOT_RESERVED = "ble-adapter-not-reserved"
+
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
 
@@ -88,6 +90,7 @@ class MatterController(AbstractController):
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
         self._majordom_descoveries = dict()
+        self._adapter_missing = False  # ble-adapter-not-reserved reported, across restarts
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -131,6 +134,7 @@ class MatterController(AbstractController):
             ble_delegate = MatterServerBLEDelegate(f"{self._server_url}/ble", router, self._matter_client_session)
             self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
             self._ble_cancel = router.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
+        await self._check_direct_adapter()
 
         await self._sync_with_server()
         self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
@@ -221,6 +225,23 @@ class MatterController(AbstractController):
     def _ble_mode(self) -> str:
         settings = self.platform.settings
         return settings.ble_mode if isinstance(settings, MatterSettings) else "router"
+
+    async def _check_direct_adapter(self):
+        """Direct mode leaves matterjs-server without Bluetooth until an adapter is reserved for it. A changed mode or
+        a newly bound adapter restarts the controller (settings and the matter endpoint change), which checks again."""
+        # "" from our matterjs-server without an adapter; no param at all from a matter-server the user runs (pinned)
+        if self._ble_mode == "direct" and self.peripherals.endpoint("matter").params.get("adapter") == "":
+            message = (
+                "Bluetooth is set to direct, but no Bluetooth adapter is reserved for matterjs-server, so devices "
+                "can't be added over Bluetooth. Reserve an adapter for matterjs-server, or set Bluetooth to router."
+            )
+            await self.platform.output.controller_did_encounter_error(
+                self, IntegrationError(self._ADAPTER_NOT_RESERVED, message)
+            )
+            self._adapter_missing = True
+        elif self._adapter_missing:
+            await self.platform.output.controller_did_resolve_error(self, self._ADAPTER_NOT_RESERVED)
+            self._adapter_missing = False
 
     @property
     def _server_url(self) -> str:

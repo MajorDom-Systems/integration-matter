@@ -22,7 +22,10 @@ MATTERJS_SERVER = Service(
     # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet. Bluetooth too: it has an
     # adapter of its own only when one is reserved for it (ble_mode "direct"), the router has every other.
     needs=[Need("ip"), Need("thread", ["otbr-rest"], required=False), Need("ble", ["bluez"], required=False)],
-    provides=[Endpoint("matter", "matter-server", "ws://127.0.0.1:{ports.api}")],  # the base URL: /ws, /ble
+    # the base URL: /ws, /ble; "adapter" tells the controller whether an adapter is bound here (empty: none)
+    provides=[
+        Endpoint("matter", "matter-server", "ws://127.0.0.1:{ports.api}", params={"adapter": "{peripherals.ble.url}"})
+    ],
     ports={"api": 5580},
     compose={
         # :dev pinned by digest (2026-10-08); bump on purpose
@@ -33,13 +36,17 @@ MATTERJS_SERVER = Service(
         "environment": {
             "STORAGE_PATH": "/data",
             "PORT": "{ports.api}",
-            # Bluetooth comes from the hub (see ble_delegate) unless an adapter was reserved for it. BLUETOOTH_ADAPTER
-            # follows matterjs-server's --bluetooth-adapter, which its README documents as a flag only (unverified)
+            # Bluetooth comes from the hub (see ble_delegate) unless an adapter was reserved for it. Then noble drives
+            # it through the host's BlueZ over the system bus: its default HCI socket backend needs root
             "BLE_PROXY": "{peripherals.ble.url:!true}",
             "BLUETOOTH_ADAPTER": "{peripherals.ble.params[index]}",
+            "NOBLE_BINDINGS": "{peripherals.ble.url:?dbus}",
             # matter.js logs every command's fields at info, the Thread network key included
             "LOG_LEVEL": "warning",
         },
-        "volumes": ["{data}:/data"],
+        "volumes": [
+            "{data}:/data",
+            "{peripherals.ble.url:?/run/dbus:/run/dbus:ro}",  # the system bus only with an adapter: gone without one
+        ],
     },
 )

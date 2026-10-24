@@ -1,14 +1,16 @@
 """Bluetooth for commissioning: through the hub's router (the default), or matterjs-server's own adapter ("direct")."""
 
 import asyncio
+import json
 import tempfile
 from functools import partial
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
 import pytest
 from majordom_integration_sdk import Endpoint
+from majordom_integration_sdk.runtime import Runtime
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import (
     FakeBLERouter,
@@ -18,12 +20,13 @@ from majordom_integration_sdk.testing import (
 )
 
 from majordom_matter import MatterController
-from majordom_matter.config import MATTERJS_SERVER, MatterSettings
+from majordom_matter.config import MatterSettings
 from majordom_matter.model import MatterDeviceIntegrationData, MatterDeviceState
 from majordom_matter.testing import FakeMatterClient, FakeMatterServer
 
 SERVER = Endpoint("matter", "matter-server", "ws://matter-server")
 COMMISSIONABLE = "0000fff6-0000-1000-8000-00805f9b34fb"
+HCI0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"})
 
 
 @pytest.fixture
@@ -101,12 +104,42 @@ async def test_direct_it_takes_a_pairing_code_for_matterjs_server_to_find_the_de
     await router.stop()
 
 
-def test_matterjs_server_proxies_bluetooth_unless_it_got_an_adapter():
-    ble = next(need for need in MATTERJS_SERVER.needs if need.family == "ble")
-    assert ble.dialects == ["bluez"] and not ble.required
-    environment = MATTERJS_SERVER.compose["environment"]
-    assert environment["BLE_PROXY"] == "{peripherals.ble.url:!true}"
-    assert environment["BLUETOOTH_ADAPTER"] == "{peripherals.ble.params[index]}"
+async def matterjs_server(tmp_path: Path, monkeypatch, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
+    """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
+    monkeypatch.setattr(
+        "majordom_integration_sdk.runtime.runtime._host_endpoints", lambda: [Endpoint("ip", shared=True), HCI0]
+    )
+    runtime = Runtime(tmp_path, {"matter": MatterController}, docker=False, scan=False, builtins=[FakeBLERouter()])
+    await runtime.reserve("matterjs-server", "ble", reserved)
+    peripherals = runtime.peripherals("matter")
+    assert peripherals is not None
+    return json.loads((tmp_path / "compose.json").read_text())["services"]["matterjs-server"], peripherals.endpoint(
+        "matter"
+    )
+
+
+async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_off_the_system_bus(tmp_path, monkeypatch):
+    service, matter = await matterjs_server(tmp_path, monkeypatch, reserved=None)
+    environment = service["environment"]
+    assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
+        "true",
+        "",
+        "",
+    )
+    assert service["volumes"] == [f"{tmp_path}/services/matterjs-server:/data"]
+    assert matter.params["adapter"] == ""
+
+
+async def test_with_an_adapter_reserved_matterjs_server_drives_it_through_bluez(tmp_path, monkeypatch):
+    service, matter = await matterjs_server(tmp_path, monkeypatch, reserved="hci0")
+    environment = service["environment"]
+    assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
+        "",
+        "0",
+        "dbus",
+    )
+    assert service["volumes"] == [f"{tmp_path}/services/matterjs-server:/data", "/run/dbus:/run/dbus:ro"]
+    assert matter.params["adapter"] == "hci0"
 
 
 def test_the_router_is_the_default():

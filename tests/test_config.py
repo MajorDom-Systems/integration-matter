@@ -19,7 +19,8 @@ def test_listens_on_the_allocated_port():
 
 
 def test_provides_its_base_url_on_the_allocated_port():
-    assert MATTERJS_SERVER.provides == [Endpoint("matter", "matter-server", "ws://127.0.0.1:{ports.api}")]
+    (provided,) = MATTERJS_SERVER.provides
+    assert (provided.family, provided.dialect) == ("matter", "matter-server")
     assert MATTERJS_SERVER.provides[0].url.format(ports=PORTS) == "ws://127.0.0.1:45812"  # the API at /ws, BLE at /ble
 
 

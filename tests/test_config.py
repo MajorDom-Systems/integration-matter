@@ -26,9 +26,9 @@ def test_provides_its_base_url_on_the_allocated_port():
 
 def test_the_controller_needs_the_router_not_the_hosts_bluetooth():
     ble = next(need for need in MatterController.needs if need.family == "ble")
-    assert ble.accepts(Endpoint("ble", "router", "router", shared=True))
+    assert ble.accepts(Endpoint("ble", "router", "router", is_shared=True))
     assert not ble.accepts(Endpoint("ble", "bluez", "hci0"))
-    assert not ble.required
+    assert not ble.is_required
 
 
 def test_keeps_credentials_out_of_its_logs():

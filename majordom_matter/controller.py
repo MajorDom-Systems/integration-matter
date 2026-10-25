@@ -64,7 +64,7 @@ class MatterController(AbstractController):
 
     # matter: matterjs-server's base URL (its API at /ws, its BLE proxy at /ble);
     # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
-    needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], required=False)]
+    needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], is_required=False)]
     services = [MATTERJS_SERVER]
 
     _matter_client: MatterClient

@@ -8,7 +8,7 @@ MATTERJS_SERVER = Service(
     # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet. Bluetooth too: an adapter
     # of its own only when one is reserved for it. The router is an in-process object a container can't bind: it
     # reaches matterjs-server through the controller (ble_delegate, over /ble) instead.
-    needs=[Need("ip"), Need("thread", ["otbr-rest"], required=False), Need("ble", ["bluez"], required=False)],
+    needs=[Need("ip"), Need("thread", ["otbr-rest"], is_required=False), Need("ble", ["bluez"], is_required=False)],
     # the base URL: /ws, /ble; "adapter" tells the controller whether an adapter is bound here (empty: none)
     provides=[
         Endpoint("matter", "matter-server", "ws://127.0.0.1:{ports.api}", params={"adapter": "{peripherals.ble.url}"})

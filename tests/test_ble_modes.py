@@ -105,7 +105,7 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
 async def matterjs_server(tmp_path: Path, monkeypatch, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
     """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
     monkeypatch.setattr(
-        "majordom_integration_sdk.runtime.runtime._host_endpoints", lambda: [Endpoint("ip", shared=True), HCI0]
+        "majordom_integration_sdk.runtime.runtime._host_endpoints", lambda: [Endpoint("ip", is_shared=True), HCI0]
     )
     runtime = Runtime(tmp_path, {"matter": MatterController}, docker=False, scan=False, builtins=[FakeBLERouter()])
     await runtime.reserve("matterjs-server", "ble", reserved)

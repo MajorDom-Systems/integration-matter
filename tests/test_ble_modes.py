@@ -107,7 +107,13 @@ async def matterjs_server(tmp_path: Path, monkeypatch, reserved: str | None) -> 
     monkeypatch.setattr(
         "majordom_integration_sdk.runtime.runtime._host_endpoints", lambda: [Endpoint("ip", is_shared=True), HCI0]
     )
-    runtime = Runtime(tmp_path, {"matter": MatterController}, docker=False, scan=False, builtins=[FakeBLERouter()])
+    runtime = Runtime(
+        tmp_path,
+        {"matter": MatterController},
+        is_docker_enabled=False,
+        is_scan_enabled=False,
+        builtins=[FakeBLERouter()],
+    )
     await runtime.reserve("matterjs-server", "ble", reserved)
     peripherals = runtime.peripherals("matter")
     assert peripherals is not None

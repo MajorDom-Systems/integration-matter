@@ -8,7 +8,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import IntegrationError, Need, NoSettings, PeripheralChange
+from majordom_integration_sdk import Context, IntegrationError, Need, NoSettings, PeripheralChange
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.schemas.base import NonEmptyStr
@@ -16,6 +16,7 @@ from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
+from matter_server.client.exceptions import InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
@@ -130,10 +131,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
     async def _sync_with_server(self):
         """Hands matterjs-server the networks and follows the devices on its fabric; on every (re)connect."""
         # Networks new devices get commissioned onto.
-        if wifi := self.platform.context.wifi:
-            await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
-        if dataset := self.platform.context.thread_dataset:
-            await self._matter_client.set_thread_operational_dataset(dataset)
+        await self._hand_over_networks()
 
         device_nodes: list[int] = []
         nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
@@ -216,6 +214,20 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         if not self.peripherals.endpoint("matter").params.get("adapter"):
             self._lend_router(self.peripherals.instance("ble"))
         return True
+
+    async def context_did_change(self, before: Context) -> bool:
+        """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
+        context = self.platform.context
+        if (context.wifi, context.thread_dataset) != (before.wifi, before.thread_dataset):
+            with contextlib.suppress(InvalidState):  # matterjs-server is away: _stay_connected hands them over
+                await self._hand_over_networks()
+        return True
+
+    async def _hand_over_networks(self):
+        if wifi := self.platform.context.wifi:
+            await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
+        if dataset := self.platform.context.thread_dataset:
+            await self._matter_client.set_thread_operational_dataset(dataset)
 
     def _lend_router(self, router: BLERouter):
         # matterjs-server commissions over Bluetooth through the hub's radios, not its own

@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from matter_server.client.exceptions import CannotConnect
+from matter_server.client.exceptions import CannotConnect, InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import NodeNotExists
 from matter_server.common.helpers.util import dataclass_from_dict
@@ -114,10 +114,16 @@ class FakeMatterClient:
         return None
 
     async def set_wifi_credentials(self, ssid: str, credentials: str) -> None:
+        self._require_server()
         self.networks["wifi"] = (ssid, credentials)
 
     async def set_thread_operational_dataset(self, dataset: str) -> None:
+        self._require_server()
         self.networks["thread"] = dataset
+
+    def _require_server(self):
+        if not self.server.up:
+            raise InvalidState("Not connected")  # as the real client does once matter-server went away
 
     # --- nodes ---
     def get_nodes(self) -> list[MatterNode]:

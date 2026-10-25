@@ -466,6 +466,25 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
     await controller.stop()
 
 
+async def test_a_new_thread_network_reaches_matter_server_in_place(controller):
+    ctrl, _ = controller
+    before, ctrl.platform = ctrl.platform.context, ctrl.platform.copy(context=Context(thread_dataset="0e08abcd"))
+    assert await ctrl.context_did_change(before)
+    assert cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"}
+
+
+async def test_a_new_thread_network_reaches_a_lost_matter_server_once_it_is_back(controller):
+    ctrl, output = controller
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost.lose_server()
+    await _wait(lambda: "server-unreachable" in output.errors)
+    before, ctrl.platform = ctrl.platform.context, ctrl.platform.copy(context=Context(thread_dataset="0e08abcd"))
+    assert await ctrl.context_did_change(before)
+    lost.server.restore()
+    await _wait(lambda: "server-unreachable" not in output.errors)
+    assert cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"}
+
+
 async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     controller = _matter(build_test_platform())

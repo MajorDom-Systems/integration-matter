@@ -24,7 +24,7 @@ from matter_server.common.models import CommissionableNodeData, EventType, Matte
 
 from majordom_matter.ble_delegate import MatterServerBLEDelegate
 from majordom_matter.client import MatterClient
-from majordom_matter.config import MATTERJS_SERVER, MatterSettings
+from majordom_matter.config import MATTERJS_SERVER
 
 from .exceptions import (
     MatterConnectionError,
@@ -66,7 +66,6 @@ class MatterController(AbstractController):
     # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
     needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], required=False)]
     services = [MATTERJS_SERVER]
-    settings = MatterSettings
 
     _matter_client: MatterClient
     _matter_client_session: ClientSession
@@ -79,8 +78,6 @@ class MatterController(AbstractController):
     # via the Bluetooth router instead.
     _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
-    _ADAPTER_NOT_RESERVED = "ble-adapter-not-reserved"
-
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
 
@@ -90,7 +87,6 @@ class MatterController(AbstractController):
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
         self._majordom_descoveries = dict()
-        self._adapter_missing = False  # ble-adapter-not-reserved reported, across restarts
 
     # -------------------------------------------------------------------------
     # AbstractController interface
@@ -125,7 +121,7 @@ class MatterController(AbstractController):
         # discovery loop above can't see them). None without the router (no Bluetooth on this hub).
         self._ble_addresses: dict[UUID, set[str]] = {}  # discovery_id -> live BLE addresses
         self._ble_cancel = None
-        if self._ble_mode == "direct":
+        if self.peripherals.endpoint("matter").params.get("adapter"):
             # matterjs-server holds an adapter of its own and scans inside commission_with_code; it can't list
             # commissionable BLE devices, so one generic discovery takes the pairing code
             await self._offer_commissioning_by_code()
@@ -134,7 +130,6 @@ class MatterController(AbstractController):
             ble_delegate = MatterServerBLEDelegate(f"{self._server_url}/ble", router, self._matter_client_session)
             self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
             self._ble_cancel = router.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
-        await self._check_direct_adapter()
 
         await self._sync_with_server()
         self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
@@ -220,28 +215,6 @@ class MatterController(AbstractController):
             return
         await self._matter_client.disconnect()
         await self._matter_client_session.close()
-
-    @property
-    def _ble_mode(self) -> str:
-        settings = self.platform.settings
-        return settings.ble_mode if isinstance(settings, MatterSettings) else "router"
-
-    async def _check_direct_adapter(self):
-        """Direct mode leaves matterjs-server without Bluetooth until an adapter is reserved for it. A changed mode or
-        a newly bound adapter restarts the controller (settings and the matter endpoint change), which checks again."""
-        # "" from our matterjs-server without an adapter; no param at all from a matter-server the user runs (pinned)
-        if self._ble_mode == "direct" and self.peripherals.endpoint("matter").params.get("adapter") == "":
-            message = (
-                "Bluetooth is set to direct, but no Bluetooth adapter is reserved for matterjs-server, so devices "
-                "can't be added over Bluetooth. Reserve an adapter for matterjs-server, or set Bluetooth to router."
-            )
-            await self.platform.output.controller_did_encounter_error(
-                self, IntegrationError(self._ADAPTER_NOT_RESERVED, message)
-            )
-            self._adapter_missing = True
-        elif self._adapter_missing:
-            await self.platform.output.controller_did_resolve_error(self, self._ADAPTER_NOT_RESERVED)
-            self._adapter_missing = False
 
     @property
     def _server_url(self) -> str:
@@ -571,7 +544,7 @@ class MatterController(AbstractController):
         await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
-    # Device -> Hub: commissioning by code — ble_mode "direct", matterjs-server holds the adapter
+    # Device -> Hub: commissioning by code — matterjs-server holds an adapter of its own
     # -------------------------------------------------------------------------
 
     @property
@@ -597,7 +570,7 @@ class MatterController(AbstractController):
         await self.platform.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
-    # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP (ble_mode "router")
+    # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP, through the router
     # -------------------------------------------------------------------------
 
     async def ble_did_discover_device(self, ble: BLERouter, info: BLEDiscoveryInfo):

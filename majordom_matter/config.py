@@ -1,26 +1,13 @@
 """matterjs-server: the Matter controller service this integration drives over its WebSocket API (``/ws``), lending it
 the hub's Bluetooth over its BLE proxy endpoint (``/ble``)."""
 
-from typing import Literal
-
 from majordom_integration_sdk import Endpoint, Need, Service
-from pydantic import BaseModel, Field
-
-
-class MatterSettings(BaseModel):
-    ble_mode: Literal["router", "direct"] = Field(
-        "router",
-        title="Bluetooth",
-        description="Router lends matterjs-server every radio the hub hears with, and lists the devices waiting to be "
-        "added. Direct leaves Bluetooth to matterjs-server on the adapter reserved for it: devices are then added by "
-        "their pairing code.",
-    )
-
 
 MATTERJS_SERVER = Service(
     "matterjs-server",
-    # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet. Bluetooth too: it has an
-    # adapter of its own only when one is reserved for it (ble_mode "direct"), the router has every other.
+    # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet. Bluetooth too: an adapter
+    # of its own only when one is reserved for it. The router is an in-process object a container can't bind: it
+    # reaches matterjs-server through the controller (ble_delegate, over /ble) instead.
     needs=[Need("ip"), Need("thread", ["otbr-rest"], required=False), Need("ble", ["bluez"], required=False)],
     # the base URL: /ws, /ble; "adapter" tells the controller whether an adapter is bound here (empty: none)
     provides=[

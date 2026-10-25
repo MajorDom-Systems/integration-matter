@@ -532,7 +532,7 @@ async def test_stopping_matter_while_it_reconnects(monkeypatch):
     await _wait(lambda: bool(output.errors))
     await asyncio.sleep(0.1)  # a few failed attempts
     await asyncio.wait_for(controller.stop(), 2)
-    assert list(output.errors) == ["server-unreachable"] and output.errors["server-unreachable"].still_running
+    assert list(output.errors) == ["server-unreachable"] and output.errors["server-unreachable"].is_still_running
 
 
 async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypatch):

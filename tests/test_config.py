@@ -4,24 +4,24 @@ from types import SimpleNamespace
 
 from majordom_integration_sdk import Endpoint
 
-from majordom_matter.config import MATTERJS_SERVER
+from majordom_matter.config import matterjs_server
 from majordom_matter.controller import MatterController
 
 PORTS = SimpleNamespace(api=45812)
 
 
 def test_prefers_its_usual_port():
-    assert MATTERJS_SERVER.ports == {"api": 5580}
+    assert matterjs_server().ports == {"api": 5580}
 
 
 def test_listens_on_the_allocated_port():
-    assert MATTERJS_SERVER.compose["environment"]["PORT"].format(ports=PORTS) == "45812"
+    assert matterjs_server().compose["environment"]["PORT"].format(ports=PORTS) == "45812"
 
 
 def test_provides_its_base_url_on_the_allocated_port():
-    (provided,) = MATTERJS_SERVER.provides
+    (provided,) = matterjs_server().provides
     assert (provided.family, provided.dialect) == ("matter", "matter-server")
-    assert MATTERJS_SERVER.provides[0].url.format(ports=PORTS) == "ws://127.0.0.1:45812"  # the API at /ws, BLE at /ble
+    assert provided.url.format(ports=PORTS) == "ws://127.0.0.1:45812"  # the API at /ws, BLE at /ble
 
 
 def test_the_controller_needs_the_router_not_the_hosts_bluetooth():
@@ -32,4 +32,4 @@ def test_the_controller_needs_the_router_not_the_hosts_bluetooth():
 
 
 def test_keeps_credentials_out_of_its_logs():
-    assert MATTERJS_SERVER.compose["environment"]["LOG_LEVEL"] == "warning"
+    assert matterjs_server().compose["environment"]["LOG_LEVEL"] == "warning"

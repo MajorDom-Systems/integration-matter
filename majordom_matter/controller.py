@@ -2,17 +2,15 @@ import asyncio
 import contextlib
 import inspect
 import logging
-from collections.abc import Mapping
 from typing import override
 from uuid import UUID
 
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import IntegrationError, Need
+from majordom_integration_sdk import IntegrationError, Need, NoSettings
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.controller import AbstractController, Platform
-from majordom_integration_sdk.peripherals import Bound
 from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
@@ -24,7 +22,6 @@ from matter_server.common.models import CommissionableNodeData, EventType, Matte
 
 from majordom_matter.ble_delegate import MatterServerBLEDelegate
 from majordom_matter.client import MatterClient
-from majordom_matter.config import MATTERJS_SERVER
 
 from .exceptions import (
     MatterConnectionError,
@@ -52,7 +49,7 @@ from .model import (
 )
 
 
-class MatterController(AbstractController):
+class MatterController(AbstractController[MatterDevice, MatterParameter]):
     """Bridges the Hub to Matter devices through a Matter controller server (matterjs-server).
 
     matterjs-server owns the Matter fabric and commissioning, over the hub's Bluetooth
@@ -65,7 +62,6 @@ class MatterController(AbstractController):
     # matter: matterjs-server's base URL (its API at /ws, its BLE proxy at /ble);
     # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
     needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], is_required=False)]
-    services = [MATTERJS_SERVER]
 
     _matter_client: MatterClient
     _matter_client_session: ClientSession
@@ -81,8 +77,8 @@ class MatterController(AbstractController):
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
 
-    def __init__(self, platform: Platform, peripherals: Mapping[str, Bound] | None = None):
-        super().__init__(platform, peripherals)
+    def __init__(self, platform: Platform, *, settings: NoSettings | None = None):
+        super().__init__(platform, settings=settings)
         # Instance state (not class-level): the mapper is wired with the framework's UUID
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)

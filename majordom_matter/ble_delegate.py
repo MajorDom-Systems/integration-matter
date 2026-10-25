@@ -121,7 +121,9 @@ class MatterServerBLEDelegate:
         peripheral = self._peripherals.get(handle)
         if opcode == _WRITE and peripheral and peripheral.write_handle is not None:
             try:
-                await peripheral.connection.write(peripheral.write_handle, frame[_FRAME.size :], response=True)
+                await peripheral.connection.write(
+                    peripheral.write_handle, frame[_FRAME.size :], is_response_needed=True
+                )
             except Exception as e:  # a BTP segment is no request to fail, and BTP can't skip one: end the connection
                 logger.warning(f"Bluetooth write on connection {handle} failed, disconnecting: {e!r}")
                 self._lost(handle)

@@ -35,10 +35,10 @@ class FakeConnection:
     async def read(self, handle):
         return b""
 
-    async def write(self, handle, data, response=True):
+    async def write(self, handle, data, is_response_needed=True):
         if self.error:
             raise self.error
-        self.writes.append((handle, data, response))
+        self.writes.append((handle, data, is_response_needed))
 
     async def start_notify(self, handle, callback):
         self.notify = callback

@@ -1,7 +1,7 @@
 # Runs the Matter integration's virtual-device suite against real MVD `chef` binaries.
 # Build context is the repo root; the SDK is a published PyPI dependency
 # (majordom-integration-sdk), resolved by `poetry install` — nothing is copied from outside the repo.
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 

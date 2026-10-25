@@ -18,6 +18,7 @@ from majordom_integration_sdk.testing import (
     FakeCompose,
     FakePeripheral,
     RecordingControllerOutput,
+    RecordingRuntimeOutput,
     build_test_platform,
 )
 
@@ -102,18 +103,24 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     await router.stop()
 
 
-async def matterjs_server(tmp_path: Path, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
-    """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
+async def hub(tmp_path: Path, router: FakeBLERouter, reserved: str | None) -> tuple[Runtime, MatterController]:
+    """A hub with hci0 running Matter, once its controller runs."""
     hci0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"}, instance=FakeBLESource("hci0"))
     host = FakePeripheral("host", provides=[Endpoint("ip", is_shared=True), hci0])
     exported = majordom_matter.peripherals(build_test_platform())
     (controller,) = (p for p in exported if isinstance(p, MatterController))
-    runtime = Runtime(tmp_path, [host, FakeCompose(), FakeBLERouter(), *exported])
+    runtime = Runtime(tmp_path, [host, FakeCompose(), router, *exported], output=RecordingRuntimeOutput())
     await runtime.reserve("matterjs-server", "ble", reserved)
     await runtime.start()
     async with asyncio.timeout(2):
         while runtime.status(controller).state != PeripheralState.RUNNING:
             await asyncio.sleep(0.01)
+    return runtime, controller
+
+
+async def matterjs_server(tmp_path: Path, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
+    """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
+    runtime, controller = await hub(tmp_path, FakeBLERouter(), reserved)
     compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
     await runtime.stop()
     return compose["services"]["matterjs-server"], controller.peripherals.endpoint("matter")
@@ -141,3 +148,35 @@ async def test_with_an_adapter_reserved_matterjs_server_drives_it_through_bluez(
     )
     assert service["volumes"] == [f"{tmp_path}/peripherals/matterjs-server:/data", "/run/dbus:/run/dbus:ro"]
     assert matter.params["adapter"] == "hci0"
+
+
+class LateRouter(FakeBLERouter):
+    """A router that comes up only once let: after Matter runs."""
+
+    def __init__(self, sources: list[FakeBLESource]):
+        super().__init__(sources)
+        self.is_let = asyncio.Event()
+
+    async def start(self):
+        await self.is_let.wait()
+        await super().start()
+
+
+@pytest.mark.parametrize(
+    ("reserved", "waiting"), [(None, ["bulb"]), ("hci0", ["Matter device (enter its pairing code)"])]
+)
+async def test_a_router_coming_up_after_matter_is_taken_without_a_restart(tmp_path, fake_server, reserved, waiting):
+    radio = FakeBLESource("hci1")
+    router = LateRouter([radio])
+    runtime, controller = await hub(tmp_path, router, reserved)
+    router.is_let.set()
+    async with asyncio.timeout(2):
+        while "ble" not in controller.peripherals.bound:
+            await asyncio.sleep(0.01)
+
+    radio.advertise("AA", local_name="bulb", service_data={COMMISSIONABLE: bytes([0, 0, 0x0F, 0xF1, 0xFF, 0, 0x80, 0])})
+    await asyncio.sleep(0.05)
+    assert by_ble(controller) == waiting
+    statuses = cast(RecordingRuntimeOutput, runtime.output).statuses
+    assert [status.state for key, status in statuses if key == "matter"].count(PeripheralState.STARTING) == 1
+    await runtime.stop()

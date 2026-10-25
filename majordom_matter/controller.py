@@ -8,7 +8,7 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import IntegrationError, Need, NoSettings
+from majordom_integration_sdk import IntegrationError, Need, NoSettings, PeripheralChange
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.schemas.base import NonEmptyStr
@@ -122,10 +122,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             # commissionable BLE devices, so one generic discovery takes the pairing code
             await self._offer_commissioning_by_code()
         elif router := self.peripherals.instance("ble"):
-            # matterjs-server commissions over Bluetooth through the hub's radios, not its own
-            ble_delegate = MatterServerBLEDelegate(f"{self._server_url}/ble", router, self._matter_client_session)
-            self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
-            self._ble_cancel = router.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
+            self._lend_router(router)
 
         await self._sync_with_server()
         self._background_tasks.append(asyncio.create_task(self._stay_connected(listener)))
@@ -211,6 +208,20 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             return
         await self._matter_client.disconnect()
         await self._matter_client_session.close()
+
+    async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
+        """The router coming up once Matter runs is taken as at the start, in place; anything else restarts Matter."""
+        if change.family != "ble" or change.before is not None:
+            return False
+        if not self.peripherals.endpoint("matter").params.get("adapter"):
+            self._lend_router(self.peripherals.instance("ble"))
+        return True
+
+    def _lend_router(self, router: BLERouter):
+        # matterjs-server commissions over Bluetooth through the hub's radios, not its own
+        ble_delegate = MatterServerBLEDelegate(f"{self._server_url}/ble", router, self._matter_client_session)
+        self._background_tasks.append(asyncio.create_task(ble_delegate.run()))
+        self._ble_cancel = router.register(self, {self._MATTER_COMMISSIONABLE_SERVICE})
 
     @property
     def _server_url(self) -> str:

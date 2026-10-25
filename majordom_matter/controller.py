@@ -140,7 +140,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
         device_nodes: list[int] = []
         nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
-        async with self.platform.make_device_repository() as device_repository:
+        async with self.device_repository() as device_repository:
             for device in await device_repository.get_all(as_=MatterDevice):
                 if node := nodes.get(device.integration_data.node_id):
                     self._subscription(device.id, node)
@@ -333,7 +333,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         node = self._matter_client.get_node(commission_node.node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
-        async with self.platform.make_device_repository() as device_repository:
+        async with self.device_repository() as device_repository:
             device = await device_repository.state(discovery.id, MatterDeviceState)
             assert device
             device.id = device_id
@@ -483,7 +483,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 raise
 
             exception_class, message = match
-            async with self.platform.make_device_repository() as device_repository:
+            async with self.device_repository() as device_repository:
                 device_state = await device_repository.state(device.id, MatterDeviceState)
                 if device_state is not None:
                     # state() returns None only if the device was unpaired/removed out from under us;

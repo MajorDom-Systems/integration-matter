@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import tempfile
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -10,23 +9,25 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from majordom_integration_sdk import Endpoint
-from majordom_integration_sdk.runtime import Runtime
+from majordom_integration_sdk import Endpoint, Peripherals
+from majordom_integration_sdk.runtime import PeripheralState, Runtime
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import (
     FakeBLERouter,
     FakeBLESource,
+    FakeCompose,
+    FakePeripheral,
     RecordingControllerOutput,
     build_test_platform,
 )
 
+import majordom_matter
 from majordom_matter import MatterController
 from majordom_matter.model import MatterDeviceIntegrationData, MatterDeviceState
 from majordom_matter.testing import FakeMatterClient, FakeMatterServer
 
 SERVER = Endpoint("matter", "matter-server", "ws://matter-server")
 COMMISSIONABLE = "0000fff6-0000-1000-8000-00805f9b34fb"
-HCI0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"})
 
 
 @pytest.fixture
@@ -36,9 +37,8 @@ def fake_server(monkeypatch):
 
 
 async def started(router: FakeBLERouter | None, server: Endpoint = SERVER) -> MatterController:
-    platform = build_test_platform(Path(tempfile.mkdtemp()), integration="Matter")
-    peripherals = {"matter": server} | ({"ble": router.endpoint} if router else {})
-    controller = MatterController(platform, peripherals)
+    controller = MatterController(build_test_platform())
+    controller.peripherals = Peripherals({"matter": server} | ({"ble": router.endpoint} if router else {}))
     await controller.start()
     return controller
 
@@ -80,7 +80,7 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     assert by_ble(controller) == ["Matter device (enter its pairing code)"]  # the router isn't used
 
     (by_code,) = (d for d in controller.discoveries.values() if d.transport == "BLE")
-    async with controller.platform.make_device_repository() as repo:  # what the Hub seeds when pairing starts
+    async with controller.device_repository() as repo:  # what the Hub seeds when pairing starts
         await repo.save(
             MatterDeviceState(
                 id=by_code.id,
@@ -102,45 +102,42 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     await router.stop()
 
 
-async def matterjs_server(tmp_path: Path, monkeypatch, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
+async def matterjs_server(tmp_path: Path, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
     """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
-    monkeypatch.setattr(
-        "majordom_integration_sdk.runtime.runtime._host_endpoints", lambda: [Endpoint("ip", is_shared=True), HCI0]
-    )
-    runtime = Runtime(
-        tmp_path,
-        {"matter": MatterController},
-        is_docker_enabled=False,
-        is_scan_enabled=False,
-        builtins=[FakeBLERouter()],
-    )
+    hci0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"}, instance=FakeBLESource("hci0"))
+    host = FakePeripheral("host", provides=[Endpoint("ip", is_shared=True), hci0])
+    exported = majordom_matter.peripherals(build_test_platform())
+    (controller,) = (p for p in exported if isinstance(p, MatterController))
+    runtime = Runtime(tmp_path, [host, FakeCompose(), FakeBLERouter(), *exported])
     await runtime.reserve("matterjs-server", "ble", reserved)
-    peripherals = runtime.peripherals("matter")
-    assert peripherals is not None
-    return json.loads((tmp_path / "compose.json").read_text())["services"]["matterjs-server"], peripherals.endpoint(
-        "matter"
-    )
+    await runtime.start()
+    async with asyncio.timeout(2):
+        while runtime.status(controller).state != PeripheralState.RUNNING:
+            await asyncio.sleep(0.01)
+    compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
+    await runtime.stop()
+    return compose["services"]["matterjs-server"], controller.peripherals.endpoint("matter")
 
 
-async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_off_the_system_bus(tmp_path, monkeypatch):
-    service, matter = await matterjs_server(tmp_path, monkeypatch, reserved=None)
+async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_off_the_system_bus(tmp_path, fake_server):
+    service, matter = await matterjs_server(tmp_path, reserved=None)
     environment = service["environment"]
     assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
         "true",
         "",
         "",
     )
-    assert service["volumes"] == [f"{tmp_path}/services/matterjs-server:/data"]
+    assert service["volumes"] == [f"{tmp_path}/peripherals/matterjs-server:/data"]
     assert matter.params["adapter"] == ""
 
 
-async def test_with_an_adapter_reserved_matterjs_server_drives_it_through_bluez(tmp_path, monkeypatch):
-    service, matter = await matterjs_server(tmp_path, monkeypatch, reserved="hci0")
+async def test_with_an_adapter_reserved_matterjs_server_drives_it_through_bluez(tmp_path, fake_server):
+    service, matter = await matterjs_server(tmp_path, reserved="hci0")
     environment = service["environment"]
     assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
         "",
         "0",
         "dbus",
     )
-    assert service["volumes"] == [f"{tmp_path}/services/matterjs-server:/data", "/run/dbus:/run/dbus:ro"]
+    assert service["volumes"] == [f"{tmp_path}/peripherals/matterjs-server:/data", "/run/dbus:/run/dbus:ro"]
     assert matter.params["adapter"] == "hci0"

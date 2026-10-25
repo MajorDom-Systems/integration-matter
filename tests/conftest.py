@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
-from majordom_integration_sdk import Endpoint
+from majordom_integration_sdk import Endpoint, Peripherals
 from majordom_integration_sdk.controller import Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
 from majordom_integration_sdk.testing import RecordingControllerOutput
@@ -118,9 +118,12 @@ async def matter(mvd):
     repository = DeviceRepositoryMemory(integration="Matter")
     output = RecordingControllerOutput()
     platform = Platform(
-        output=output, make_device_repository=repository.session, documents_folder=Path(tempfile.mkdtemp())
+        output=output,
+        make_device_repository=lambda integration: repository.session(),
+        documents_folder=Path(tempfile.mkdtemp()),
     )
-    controller = MatterController(platform, {"matter": Endpoint("matter", "matter-server", matter_server_url)})
+    controller = MatterController(platform)
+    controller.peripherals = Peripherals({"matter": Endpoint("matter", "matter-server", matter_server_url)})
     await controller.start()
     yield controller, output, repository, mvd
     await controller.stop()

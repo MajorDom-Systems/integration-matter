@@ -7,8 +7,6 @@ endpoint, so that cluster's main parameter wins. A tap is simulated the way the 
 
 import asyncio
 import json
-import tempfile
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
@@ -23,7 +21,7 @@ from chip.clusters.Objects import (
     ValveConfigurationAndControl,
     WindowCovering,
 )
-from majordom_integration_sdk import Endpoint
+from majordom_integration_sdk import Endpoint, Peripherals
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.schemas.parameter import ParameterRole, ParameterVisibility, next_main_parameter_value
@@ -39,7 +37,7 @@ from majordom_matter.testing import _FIXTURE, FakeMatterClient
 
 ENDPOINT = 13
 
-SERVER = {"matter": Endpoint("matter", "matter-server", "ws://matter-server")}
+SERVER = Peripherals({"matter": Endpoint("matter", "matter-server", "ws://matter-server")})
 
 
 def _node_with(cluster_id: int, attributes: dict[int, Any], accepted_commands: list[int]) -> MatterNode:
@@ -64,14 +62,15 @@ async def _pair(
 ) -> tuple[MatterController, FakeMatterClient, MatterDevice, MatterDeviceState]:
     fake = FakeMatterClient(node=node)
     monkeypatch.setattr("majordom_matter.controller.MatterClient", lambda url, session: fake)
-    deps = build_test_platform(documents_folder=Path(tempfile.mkdtemp()), integration="Matter")
-    controller = MatterController(deps, SERVER)
+    deps = build_test_platform()
+    controller = MatterController(deps)
+    controller.peripherals = SERVER
     await controller.start()
     async with asyncio.timeout(5):
         while not controller.discoveries:
             await asyncio.sleep(0.02)
     discovery = next(iter(controller.discoveries.values()))
-    async with deps.make_device_repository() as repo:
+    async with controller.device_repository() as repo:
         await repo.save(
             MatterDeviceState(
                 id=discovery.id,
@@ -86,7 +85,7 @@ async def _pair(
         )
     await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
     device_id = cast(RecordingControllerOutput, deps.output).connected_devices[-1]
-    async with deps.make_device_repository() as repo:
+    async with controller.device_repository() as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id, MatterDeviceState)
     assert device is not None and state is not None

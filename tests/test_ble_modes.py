@@ -143,6 +143,30 @@ async def test_a_failed_pairing_by_code_keeps_its_discovery(fake_server, monkeyp
     await controller.stop()
 
 
+async def test_a_pairing_by_code_that_lands_after_stop_keeps_its_device_for_the_next_start(fake_server, monkeypatch):
+    controller = await started(None, replace(SERVER, params={"adapter": "hci0"}))
+    (by_code,) = (d for d in controller.discoveries.values() if d.transport == "BLE")
+    await seed_the_hubs_row(controller, by_code)
+    is_answered = asyncio.Event()
+    commission_with_code = FakeMatterClient.commission_with_code
+
+    async def answered_late(self: FakeMatterClient, code: str, network_only: bool = False):
+        await is_answered.wait()
+        return await commission_with_code(self, code, network_only)
+
+    monkeypatch.setattr(FakeMatterClient, "commission_with_code", answered_late)
+    credentials = ProvidedCredentials(type=CredentialsType.code, value="3497-011-2332")
+    pairing = asyncio.create_task(controller.pair_device(by_code, credentials))
+    await asyncio.sleep(0.05)
+    await controller.stop()
+    is_answered.set()
+    device_id = await pairing
+    async with controller.platform.device_repository(controller) as repo:
+        assert await repo.get(device_id) is not None  # its next start follows it
+    assert cast(RecordingControllerOutput, controller.output).connected_devices == []
+    assert controller.discoveries == {}  # nothing offered by a stopped Matter
+
+
 async def test_through_the_router_losing_it_restarts_matter_and_stop_lets_it_go(fake_server):
     router = FakeBLERouter([FakeBLESource("hci0")])
     await router.start()

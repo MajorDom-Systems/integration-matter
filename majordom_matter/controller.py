@@ -464,7 +464,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             await device_repository.save(device, discovery.id)
 
         # only now that the Hub's row under its id moved to the device's: a pairing started from it saves one there
-        self._majordom_descoveries.pop(discovery.id)
+        self._majordom_descoveries.pop(discovery.id, None)
+        if self._matter_client is None:
+            return device_id  # Matter stopped meanwhile: its next start follows the device
         if discovery.id == self._by_code_id:
             await self._offer_commissioning_by_code()  # the next device is added the same way
         await self.output.controller_did_connect_device(self, device_id)

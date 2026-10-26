@@ -9,7 +9,7 @@ in the dockerized MVD suite, test_controller.py.
 import asyncio
 from dataclasses import replace
 from functools import partial
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -465,11 +465,20 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
     await controller.stop()
 
 
-async def test_a_new_thread_network_reaches_matter_server_in_place(controller):
+@pytest.mark.parametrize(
+    ("facts", "networks"),
+    [
+        ({"thread_dataset": "0e08abcd"}, {"thread": "0e08abcd"}),
+        ({"wifi": WifiCredentials("home", "secret")}, {"wifi": ("home", "secret")}),
+    ],
+)
+async def test_a_new_network_reaches_matter_server_in_place(
+    controller, facts: dict[str, Any], networks: dict[str, Any]
+):
     ctrl, _ = controller
-    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset="0e08abcd")
+    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, **facts)
     assert await ctrl.platform_facts_did_change(before)
-    await _wait(lambda: cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"})
+    await _wait(lambda: cast(FakeMatterClient, ctrl._matter_client).networks == networks)
 
 
 async def test_a_new_network_matter_server_doesnt_answer_holds_neither_the_hook_nor_matter(controller):

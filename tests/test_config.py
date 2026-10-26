@@ -24,8 +24,9 @@ def test_provides_its_base_url_on_the_allocated_port():
     assert provided.url.format(ports=PORTS) == "ws://127.0.0.1:45812"  # the API at /ws, BLE at /ble
 
 
-def test_listens_on_loopback_only():
-    assert matterjs_server().compose["environment"]["LISTEN_ADDRESS"] == "127.0.0.1"
+def test_listens_where_the_host_says():
+    listening = matterjs_server().compose["environment"]["LISTEN_ADDRESS"]
+    assert listening.format(host=SimpleNamespace(listen_address="0.0.0.0")) == "0.0.0.0"  # a lab harness: loopback else
 
 
 def test_the_controller_needs_the_router_not_the_hosts_bluetooth():

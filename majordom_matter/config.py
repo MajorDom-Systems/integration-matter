@@ -29,8 +29,9 @@ def matterjs_server() -> Service:
             "environment": {
                 "STORAGE_PATH": "/data",
                 "PORT": "{ports.api}",
-                # on the host network, with no authentication: anyone on the LAN could drive the fabric
-                "LISTEN_ADDRESS": "127.0.0.1",
+                # on the host network, with no authentication: anyone on the LAN could drive the fabric. Loopback
+                # unless the host opens its services to the LAN (a lab harness)
+                "LISTEN_ADDRESS": "{host.listen_address}",
                 # Bluetooth comes from the hub (see ble_delegate) unless an adapter is bound to it. Then noble
                 # drives it through the host's BlueZ over the system bus: its default HCI socket backend needs root
                 "BLE_PROXY": "{peripherals.ble.url:!true}",

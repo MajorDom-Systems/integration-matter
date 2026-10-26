@@ -882,7 +882,7 @@ async def test_a_pairing_matterjs_server_went_away_from_says_why(controller):
     ctrl, _ = controller
     pairing = await _pairing_in_flight(ctrl)
     cast(FakeMatterClient, ctrl._matter_client).lose_server()  # the client cancels the calls waiting for an answer
-    with pytest.raises(MatterConnectionError, match="ended during the pairing"):  # the Hub drops its row, the app says why
+    with pytest.raises(MatterConnectionError, match="ended during the pairing"):  # the app says why
         await pairing
 
 

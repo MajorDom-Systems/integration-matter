@@ -599,6 +599,17 @@ async def test_matter_reconnects_once_a_lost_matter_server_is_back(controller):
     await _wait(lambda: bool(output.events))  # subscribed again on the new connection
 
 
+async def test_a_matter_server_back_at_the_first_reconnect_reports_no_error(controller):
+    ctrl, output = controller
+    device_id = await _commission(ctrl)
+    output.connected_devices.clear()
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost.lose_server()
+    lost.server.restore()  # e.g. its container recreated
+    await _wait(lambda: output.connected_devices == [device_id])
+    assert output.error_log == []
+
+
 async def test_stopping_matter_while_it_reconnects(monkeypatch):
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))

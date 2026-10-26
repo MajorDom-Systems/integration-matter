@@ -277,16 +277,13 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     await listener
                 except Exception as e:
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
-                error = IntegrationError(
-                    "server-unreachable", "Lost the connection to the Matter server, reconnecting."
-                )
-                await self.output.controller_did_encounter_error(self, error)
                 for device_id, available in self._node_availability.items():
                     if available:
                         await self.output.controller_did_lose_device(self, device_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
                 delay = self._RECONNECT_DELAY
+                is_reported = False  # only once the first reconnect failed: not a blip (its container recreated)
                 while True:
                     await asyncio.sleep(delay)
                     try:
@@ -296,9 +293,16 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     except Exception as e:
                         listener.cancel()
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
+                        if not is_reported:
+                            error = IntegrationError(
+                                "server-unreachable", "Lost the connection to the Matter server, reconnecting."
+                            )
+                            await self.output.controller_did_encounter_error(self, error)
+                            is_reported = True
                         delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
-                await self.output.controller_did_resolve_error(self, "server-unreachable")
+                if is_reported:
+                    await self.output.controller_did_resolve_error(self, "server-unreachable")
                 for device_id, available in self._node_availability.items():
                     if available:
                         await self.output.controller_did_connect_device(self, device_id)

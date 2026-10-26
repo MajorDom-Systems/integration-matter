@@ -699,6 +699,17 @@ async def test_a_start_reports_the_devices_on_the_fabric_connected(controller):
     assert output.connected_devices == [device_id]
 
 
+async def test_a_start_leaves_a_device_matterjs_server_cant_reach_as_the_hub_marked_it(controller):
+    ctrl, output = controller
+    await _commission(ctrl)
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    await ctrl.stop()  # the Hub marks its devices unavailable, and every device at boot
+    output.connected_devices.clear()
+    server.node.node_data.available = False  # unplugged meanwhile
+    await ctrl.start()
+    assert output.connected_devices == [] and output.lost_devices == []  # reported once it is back
+
+
 async def test_stopping_matter_while_it_reconnects(monkeypatch):
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))

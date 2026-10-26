@@ -189,7 +189,7 @@ async def test_with_an_adapter_of_its_own_it_keeps_running_as_the_router_it_does
 
 
 async def hub(
-    tmp_path: Path, router: FakeBLERouter, *, is_router_disabled: bool = False
+    tmp_path: Path, router: FakeBLERouter, *, is_router_disabled: bool = False, adapter: str = ""
 ) -> tuple[Runtime, MatterController]:
     """A hub with hci0 running Matter, once its controller runs."""
     hci0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"}, instance=FakeBLESource("hci0"))
@@ -202,17 +202,22 @@ async def hub(
         platform=controller.platform,
         output=RecordingRuntimeOutput(),
         disabled=MemoryDisabledStore([router.key] if is_router_disabled else []),
+        retry_delays=(0.01,),
     )
     await runtime.start()
     async with asyncio.timeout(2):
-        while runtime.status(controller).state != PeripheralState.RUNNING:
+        while not (
+            runtime.status(controller).state == PeripheralState.RUNNING
+            and controller.peripherals.endpoint("matter").params.get("adapter") == adapter
+        ):
             await asyncio.sleep(0.01)
     return runtime, controller
 
 
 async def matterjs_server(tmp_path: Path, *, is_router_disabled: bool) -> tuple[dict[str, Any], Endpoint]:
     """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
-    runtime, controller = await hub(tmp_path, FakeBLERouter(), is_router_disabled=is_router_disabled)
+    adapter = "hci0" if is_router_disabled else ""
+    runtime, controller = await hub(tmp_path, FakeBLERouter(), is_router_disabled=is_router_disabled, adapter=adapter)
     compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
     await runtime.stop()
     return compose["services"]["matterjs-server"], controller.peripherals.endpoint("matter")
@@ -264,6 +269,18 @@ async def test_disabling_the_router_hands_matterjs_server_an_adapter_and_enablin
             await asyncio.sleep(0.01)
     assert by_ble(controller) == []
     assert controller._ble_cancel is not None  # the router is lent again
+    await runtime.stop()
+
+
+async def test_a_router_that_fails_hands_matterjs_server_an_adapter(tmp_path, fake_server):
+    class Broken(FakeBLERouter):
+        async def start(self):
+            raise RuntimeError("no D-Bus")
+
+    router = Broken()
+    runtime, controller = await hub(tmp_path, router, adapter="hci0")
+    assert runtime.status(router).state == PeripheralState.FAILED
+    assert by_ble(controller) == [BY_CODE]
     await runtime.stop()
 
 

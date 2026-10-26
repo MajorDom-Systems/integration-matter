@@ -7,6 +7,7 @@ in the dockerized MVD suite, test_controller.py.
 """
 
 import asyncio
+from dataclasses import replace
 from functools import partial
 from typing import cast
 from unittest.mock import AsyncMock
@@ -14,7 +15,7 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from majordom_integration_sdk import Context, Endpoint, IntegrationError, Peripherals, Platform, WifiCredentials
+from majordom_integration_sdk import Endpoint, IntegrationError, Peripherals, Platform, WifiCredentials
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
@@ -33,6 +34,7 @@ SERVER = Peripherals({"matter": Endpoint("matter", "matter-server", "ws://matter
 def _matter(platform: Platform) -> MatterController:
     controller = MatterController(platform)
     controller.peripherals = SERVER
+    controller.output = RecordingControllerOutput()
     return controller
 
 
@@ -41,10 +43,9 @@ async def controller(monkeypatch):
     """A started MatterController whose matter-server client is the in-process fake."""
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=FakeMatterServer()))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
-    deps = build_test_platform()
-    controller = _matter(deps)
+    controller = _matter(build_test_platform())
     await controller.start()
-    yield controller, deps.output
+    yield controller, controller.output
     await controller.stop()
 
 
@@ -59,18 +60,18 @@ async def _commission(controller) -> UUID:
     await _wait(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
     await _pair(controller, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    return controller.platform.output.connected_devices[-1]
+    return controller.output.connected_devices[-1]
 
 
 async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials) -> None:
-    async with controller.device_repository() as repo:
+    async with controller.platform.device_repository(controller) as repo:
         await repo.save(
             MatterDeviceState(
                 id=discovery.id,
                 name="Test",
                 room_id=UUID(int=1),
                 transport="IP",
-                integration="Matter",
+                integration="matter",
                 manufacturer=None,
                 parameters=[],
                 integration_data=MatterDeviceIntegrationData(node_id=0),
@@ -83,7 +84,7 @@ async def test_discovers_the_canned_node(controller):
     ctrl, _output = controller
     await _wait(lambda: bool(ctrl.discoveries))
     discovery = next(iter(ctrl.discoveries.values()))
-    assert discovery.integration == "Matter"
+    assert discovery.integration == "matter"
     assert discovery.transport == "IP"
     assert CredentialsType.code in discovery.expected_credentials_options
 
@@ -93,7 +94,7 @@ async def test_pairs_and_maps_parameters(controller):
     device_id = await _commission(ctrl)
 
     assert output.connected_devices == [device_id]
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id)
     assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
@@ -104,7 +105,7 @@ async def test_pairs_and_maps_parameters(controller):
 async def test_send_command_reaches_the_client(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id, MatterDeviceState)
 
@@ -134,7 +135,7 @@ async def test_attribute_update_becomes_an_event(controller):
 async def test_unpair_removes_the_node(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
 
     await ctrl.unpair(device)
@@ -144,7 +145,7 @@ async def test_unpair_removes_the_node(controller):
 async def test_fetch_emits_events(controller):
     ctrl, output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
 
     before = len(output.events)
@@ -157,7 +158,7 @@ async def test_identify_sends_identify_command(controller):
 
     ctrl, _output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
 
     await ctrl.identify(device)
@@ -181,7 +182,7 @@ async def test_start_populates_discoveries_and_stop_clears(controller):
 async def _move_to_level_parameter(ctrl, device_id: UUID):
     from chip.clusters.Objects import LevelControl
 
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id, MatterDeviceState)
     param_id = ctrl._mapper.command_parameter_uuid(
@@ -358,7 +359,7 @@ async def test_timed_invoke_follows_the_command(controller, monkeypatch):
 
     ctrl, _output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id, MatterDeviceState)
     timeouts: list[int | None] = []
@@ -391,7 +392,7 @@ async def test_hidden_main_candidate_does_not_block_a_visible_one(controller, mo
     )
     ctrl, _output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         state = await repo.state(device_id, MatterDeviceState)
     assert state.main_parameter == ctrl._mapper.command_parameter_uuid(device_id, 13, OnOff.id, 0x02)
     assert state.can_set_main_parameter(state.main_parameter)
@@ -402,7 +403,7 @@ async def test_fetch_normalizes_values_like_the_subscription(controller):
 
     ctrl, output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
     last_network_id = ctrl._mapper.attribute_parameter_uuid(device_id, 0, NetworkCommissioning.id, 0x06)
     server_list = ctrl._mapper.attribute_parameter_uuid(device_id, 0, Descriptor.id, 0x01)
@@ -426,7 +427,7 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
 
     ctrl, output = controller
     device_id = await _commission(ctrl)
-    async with ctrl.device_repository() as repo:
+    async with ctrl.platform.device_repository(ctrl) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
 
     def subscribed(parameter_id: UUID):
@@ -454,10 +455,7 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
 
 async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
-    deps = build_test_platform().copy(
-        context=Context(wifi=WifiCredentials("home", "secret"), thread_dataset="0e08abcd"),
-    )
-    controller = _matter(deps)
+    controller = _matter(build_test_platform(wifi=WifiCredentials("home", "secret"), thread_dataset="0e08abcd"))
     await controller.start()
     assert cast(FakeMatterClient, controller._matter_client).networks == {
         "wifi": ("home", "secret"),
@@ -468,8 +466,8 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
 
 async def test_a_new_thread_network_reaches_matter_server_in_place(controller):
     ctrl, _ = controller
-    before, ctrl.platform = ctrl.platform.context, ctrl.platform.copy(context=Context(thread_dataset="0e08abcd"))
-    assert await ctrl.context_did_change(before)
+    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset="0e08abcd")
+    assert await ctrl.platform_facts_did_change(before)
     assert cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"}
 
 
@@ -478,8 +476,8 @@ async def test_a_new_thread_network_reaches_a_lost_matter_server_once_it_is_back
     lost = cast(FakeMatterClient, ctrl._matter_client)
     lost.lose_server()
     await _wait(lambda: "server-unreachable" in output.errors)
-    before, ctrl.platform = ctrl.platform.context, ctrl.platform.copy(context=Context(thread_dataset="0e08abcd"))
-    assert await ctrl.context_did_change(before)
+    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset="0e08abcd")
+    assert await ctrl.platform_facts_did_change(before)
     lost.server.restore()
     await _wait(lambda: "server-unreachable" not in output.errors)
     assert cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"}
@@ -488,21 +486,22 @@ async def test_a_new_thread_network_reaches_a_lost_matter_server_once_it_is_back
 async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     controller = _matter(build_test_platform())
-    async with controller.device_repository() as repo:  # left by a commissioning that failed, or a reset matter-server
+    # left by a commissioning that failed, or a reset matter-server
+    async with controller.platform.device_repository(controller) as repo:
         await repo.save(
             MatterDeviceState(
                 id=UUID(int=7),
                 name="Bulb",
                 room_id=UUID(int=1),
                 transport="BLE",
-                integration="Matter",
+                integration="matter",
                 manufacturer=None,
                 parameters=[],
                 integration_data=MatterDeviceIntegrationData(node_id=0),
             )
         )
     await controller.start()
-    async with controller.device_repository() as repo:
+    async with controller.platform.device_repository(controller) as repo:
         device = await repo.get(UUID(int=7), as_=MatterDevice)
         assert device is not None and device.available is False
     await controller.stop()
@@ -515,7 +514,7 @@ async def test_a_device_that_never_finished_commissioning_unpairs(controller):
         name="Bulb",
         room_id=UUID(int=1),
         transport="BLE",
-        integration="Matter",
+        integration="matter",
         manufacturer=None,
         integration_data=MatterDeviceIntegrationData(node_id=0),
     )
@@ -545,11 +544,10 @@ async def test_stopping_matter_while_it_reconnects(monkeypatch):
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
-    deps = build_test_platform()
-    controller = _matter(deps)
+    controller = _matter(build_test_platform())
     await controller.start()
     server.lose()
-    output = cast(RecordingControllerOutput, deps.output)
+    output = cast(RecordingControllerOutput, controller.output)
     await _wait(lambda: bool(output.errors))
     await asyncio.sleep(0.1)  # a few failed attempts
     await asyncio.wait_for(controller.stop(), 2)
@@ -562,17 +560,14 @@ async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypat
             return None
 
     monkeypatch.setattr("majordom_matter.controller.MatterClient", GoneAtOnce)
-    deps = build_test_platform()
-
     with pytest.raises(MatterConnectionError):
-        await asyncio.wait_for(_matter(deps).start(), 2)
+        await asyncio.wait_for(_matter(build_test_platform()).start(), 2)
 
 
 async def test_stopping_matter_reports_no_error(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
-    deps = build_test_platform()
-    controller = _matter(deps)
+    controller = _matter(build_test_platform())
     await controller.start()
     await controller.stop()
     await asyncio.sleep(0.1)
-    assert cast(RecordingControllerOutput, deps.output).error_log == []
+    assert cast(RecordingControllerOutput, controller.output).error_log == []

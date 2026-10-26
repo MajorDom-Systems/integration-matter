@@ -8,9 +8,8 @@ from uuid import UUID
 from aiohttp import ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import Context, IntegrationError, Need, NoSettings, PeripheralChange
+from majordom_integration_sdk import AbstractController, IntegrationError, Need, NoSettings, PeripheralChange, Platform
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
-from majordom_integration_sdk.controller import AbstractController, Platform
 from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
@@ -135,7 +134,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
         device_nodes: list[int] = []
         nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
-        async with self.device_repository() as device_repository:
+        async with self.platform.device_repository(self) as device_repository:
             for device in await device_repository.get_all(as_=MatterDevice):
                 if node := nodes.get(device.integration_data.node_id):
                     self._subscription(device.id, node)
@@ -151,7 +150,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 discovery_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
                 discovery = Discovery(
                     id=discovery_id,
-                    integration=NonEmptyStr(self.name),
+                    integration=NonEmptyStr(self.key),
                     expected_credentials_options=[CredentialsType.none],
                     expiration=None,
                     transport=NonEmptyStr("IP"),
@@ -161,7 +160,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     device_icon=None,
                 )
                 self._majordom_descoveries[discovery_id] = discovery
-                await self.platform.output.controller_did_receive_discovery(self, discovery)
+                await self.output.controller_did_receive_discovery(self, discovery)
 
     async def stop(self):
         self._majordom_descoveries.clear()
@@ -215,18 +214,17 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             self._lend_router(self.peripherals.instance("ble"))
         return True
 
-    async def context_did_change(self, before: Context) -> bool:
+    async def platform_facts_did_change(self, before: Platform) -> bool:
         """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
-        context = self.platform.context
-        if (context.wifi, context.thread_dataset) != (before.wifi, before.thread_dataset):
+        if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
             with contextlib.suppress(InvalidState):  # matterjs-server is away: _stay_connected hands them over
                 await self._hand_over_networks()
         return True
 
     async def _hand_over_networks(self):
-        if wifi := self.platform.context.wifi:
+        if wifi := self.platform.wifi:
             await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
-        if dataset := self.platform.context.thread_dataset:
+        if dataset := self.platform.thread_dataset:
             await self._matter_client.set_thread_operational_dataset(dataset)
 
     def _lend_router(self, router: BLERouter):
@@ -269,10 +267,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 error = IntegrationError(
                     "server-unreachable", "Lost the connection to the Matter server, reconnecting."
                 )
-                await self.platform.output.controller_did_encounter_error(self, error)
+                await self.output.controller_did_encounter_error(self, error)
                 for device_id, available in self._node_availability.items():
                     if available:
-                        await self.platform.output.controller_did_lose_device(self, device_id)
+                        await self.output.controller_did_lose_device(self, device_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
                 delay = self._RECONNECT_DELAY
@@ -287,10 +285,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
                         delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
-                await self.platform.output.controller_did_resolve_error(self, "server-unreachable")
+                await self.output.controller_did_resolve_error(self, "server-unreachable")
                 for device_id, available in self._node_availability.items():
                     if available:
-                        await self.platform.output.controller_did_connect_device(self, device_id)
+                        await self.output.controller_did_connect_device(self, device_id)
         finally:
             listener.cancel()
 
@@ -356,7 +354,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         node = self._matter_client.get_node(commission_node.node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
-        async with self.device_repository() as device_repository:
+        async with self.platform.device_repository(self) as device_repository:
             device = await device_repository.state(discovery.id, MatterDeviceState)
             assert device
             device.id = device_id
@@ -418,7 +416,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
             await device_repository.save(device, discovery.id)
 
-        await self.platform.output.controller_did_connect_device(self, device_id)
+        await self.output.controller_did_connect_device(self, device_id)
         self._subscription(device_id, node)
         return device_id
 
@@ -459,7 +457,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                         )
                     )
 
-        await self.platform.output.controller_did_receive_events(self, events)
+        await self.output.controller_did_receive_events(self, events)
 
     async def send_command(self, command: DeviceCommand, device: MatterDevice, parameter: MatterParameter):
         try:
@@ -506,7 +504,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 raise
 
             exception_class, message = match
-            async with self.device_repository() as device_repository:
+            async with self.platform.device_repository(self) as device_repository:
                 device_state = await device_repository.state(device.id, MatterDeviceState)
                 if device_state is not None:
                     # state() returns None only if the device was unpaired/removed out from under us;
@@ -548,7 +546,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         )
         discovery = Discovery(
             id=discovery_id,
-            integration=NonEmptyStr(self.name),
+            integration=NonEmptyStr(self.key),
             expected_credentials_options=self._mapper.define_credentials_options(
                 node.commissioning_mode, node.pairing_hint, node.pairing_instruction, bool(node.addresses)
             ),
@@ -560,7 +558,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             device_icon=None,
         )
         self._majordom_descoveries[discovery_id] = discovery
-        await self.platform.output.controller_did_receive_discovery(self, discovery)
+        await self.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
     # Device -> Hub: commissioning by code — matterjs-server holds an adapter of its own
@@ -576,7 +574,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         and pair_device renames it to the commissioned node's."""
         discovery = Discovery(
             id=self._by_code_id,
-            integration=NonEmptyStr(self.name),
+            integration=NonEmptyStr(self.key),
             expected_credentials_options=[CredentialsType.code.with_mask("DDDD-DDD-DDDD"), CredentialsType.qr],
             expiration=None,
             transport=NonEmptyStr("BLE"),
@@ -586,7 +584,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             device_icon=None,
         )
         self._majordom_descoveries[discovery.id] = discovery
-        await self.platform.output.controller_did_receive_discovery(self, discovery)
+        await self.output.controller_did_receive_discovery(self, discovery)
 
     # -------------------------------------------------------------------------
     # Device -> Hub: BLE discovery (BLEDiscoveryListener) — commissionable devices not yet on IP, through the router
@@ -616,7 +614,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             return  # already advertised; the device keeps beaconing while its window is open
         discovery = Discovery(
             id=discovery_id,
-            integration=NonEmptyStr(self.name),
+            integration=NonEmptyStr(self.key),
             # A commissionable device accepts its manual pairing code (or QR). pair_device's BLE
             # branch feeds the code to commission_with_code, which does its own BLE scan by discriminator.
             expected_credentials_options=[CredentialsType.code.with_mask("DDDD-DDD-DDDD"), CredentialsType.qr],
@@ -628,7 +626,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             device_icon=None,
         )
         self._majordom_descoveries[discovery_id] = discovery
-        await self.platform.output.controller_did_receive_discovery(self, discovery)
+        await self.output.controller_did_receive_discovery(self, discovery)
 
     @staticmethod
     def _parse_commissionable_ble(info: BLEDiscoveryInfo) -> tuple[int, int, int] | None:
@@ -698,7 +696,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     cluster_id, attribute_id, self._mapper.parse_raw_attribute(cluster_id, attribute_id, new_value)
                 ),
             )
-            asyncio.create_task(self.platform.output.controller_did_receive_events(self, [event]))
+            asyncio.create_task(self.output.controller_did_receive_events(self, [event]))
 
         return callback
 
@@ -710,9 +708,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 return
             self._node_availability[device_id] = is_available
             if is_available:
-                asyncio.create_task(self.platform.output.controller_did_connect_device(self, device_id))
+                asyncio.create_task(self.output.controller_did_connect_device(self, device_id))
             else:
-                asyncio.create_task(self.platform.output.controller_did_lose_device(self, device_id))
+                asyncio.create_task(self.output.controller_did_lose_device(self, device_id))
 
         return callback
 

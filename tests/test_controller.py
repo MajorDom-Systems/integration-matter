@@ -30,7 +30,7 @@ async def test_discovers_a_matter_device(matter):
     controller, output, _repo, _mvd = matter
     await _wait_for(lambda: bool(output.received_discoveries))
     discovery = output.received_discoveries[-1]
-    assert discovery.integration == "Matter"
+    assert discovery.integration == "matter"
     assert discovery.transport == "IP"
 
 
@@ -45,7 +45,7 @@ async def _provisional(repository, discovery):
                 name="Test Device",
                 room_id=UUID(int=1),
                 transport="IP",
-                integration="Matter",
+                integration="matter",
                 manufacturer=None,
                 parameters=[],
                 integration_data=MatterDeviceIntegrationData(node_id=0),

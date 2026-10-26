@@ -1,4 +1,4 @@
-"""Bluetooth for commissioning: matterjs-server's own adapter when one is bound to it, else the hub's router."""
+"""Bluetooth for commissioning: the hub's router, or matterjs-server's own adapter when no router holds the adapters."""
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ from uuid import UUID
 
 import pytest
 from majordom_integration_sdk import Endpoint, Peripherals
-from majordom_integration_sdk.runtime import PeripheralState, Runtime
+from majordom_integration_sdk.runtime import MemoryDisabledStore, PeripheralState, Runtime
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import (
     FakeBLERouter,
@@ -40,6 +40,7 @@ def fake_server(monkeypatch):
 async def started(router: FakeBLERouter | None, server: Endpoint = SERVER) -> MatterController:
     controller = MatterController(build_test_platform())
     controller.peripherals = Peripherals({"matter": server} | ({"ble": router.endpoint} if router else {}))
+    controller.output = RecordingControllerOutput()
     await controller.start()
     return controller
 
@@ -73,7 +74,7 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     router = FakeBLERouter([radio])
     await router.start()
     controller = await started(router, replace(SERVER, params={"adapter": "hci1"}))
-    output = cast(RecordingControllerOutput, controller.platform.output)
+    output = cast(RecordingControllerOutput, controller.output)
 
     assert by_ble(controller) == ["Matter device (enter its pairing code)"]
     radio.advertise("AA", local_name="bulb", service_data={COMMISSIONABLE: bytes([0, 0, 0x0F, 0xF1, 0xFF, 0, 0x80, 0])})
@@ -81,14 +82,14 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     assert by_ble(controller) == ["Matter device (enter its pairing code)"]  # the router isn't used
 
     (by_code,) = (d for d in controller.discoveries.values() if d.transport == "BLE")
-    async with controller.device_repository() as repo:  # what the Hub seeds when pairing starts
+    async with controller.platform.device_repository(controller) as repo:  # what the Hub seeds when pairing starts
         await repo.save(
             MatterDeviceState(
                 id=by_code.id,
                 name="Bulb",
                 room_id=UUID(int=1),
                 transport="BLE",
-                integration="Matter",
+                integration="matter",
                 manufacturer=None,
                 parameters=[],
                 integration_data=MatterDeviceIntegrationData(node_id=0),
@@ -103,14 +104,20 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     await router.stop()
 
 
-async def hub(tmp_path: Path, router: FakeBLERouter, reserved: str | None) -> tuple[Runtime, MatterController]:
+async def hub(
+    tmp_path: Path, router: FakeBLERouter, *, is_router_disabled: bool = False
+) -> tuple[Runtime, MatterController]:
     """A hub with hci0 running Matter, once its controller runs."""
     hci0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"}, instance=FakeBLESource("hci0"))
     host = FakePeripheral("host", provides=[Endpoint("ip", is_shared=True), hci0])
     exported = majordom_matter.peripherals(build_test_platform())
     (controller,) = (p for p in exported if isinstance(p, MatterController))
-    runtime = Runtime(tmp_path, [host, FakeCompose(), router, *exported], output=RecordingRuntimeOutput())
-    await runtime.reserve("matterjs-server", "ble", reserved)
+    runtime = Runtime(
+        tmp_path,
+        [host, FakeCompose(), router, *exported],
+        output=RecordingRuntimeOutput(),
+        disabled=MemoryDisabledStore([router.key] if is_router_disabled else []),
+    )
     await runtime.start()
     async with asyncio.timeout(2):
         while runtime.status(controller).state != PeripheralState.RUNNING:
@@ -118,16 +125,16 @@ async def hub(tmp_path: Path, router: FakeBLERouter, reserved: str | None) -> tu
     return runtime, controller
 
 
-async def matterjs_server(tmp_path: Path, reserved: str | None) -> tuple[dict[str, Any], Endpoint]:
+async def matterjs_server(tmp_path: Path, *, is_router_disabled: bool) -> tuple[dict[str, Any], Endpoint]:
     """matterjs-server's compose as the runtime renders it on a hub with hci0, and the endpoint the controller gets."""
-    runtime, controller = await hub(tmp_path, FakeBLERouter(), reserved)
+    runtime, controller = await hub(tmp_path, FakeBLERouter(), is_router_disabled=is_router_disabled)
     compose = json.loads((tmp_path / "peripherals" / "compose" / "compose.json").read_text())
     await runtime.stop()
     return compose["services"]["matterjs-server"], controller.peripherals.endpoint("matter")
 
 
 async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_off_the_system_bus(tmp_path, fake_server):
-    service, matter = await matterjs_server(tmp_path, reserved=None)
+    service, matter = await matterjs_server(tmp_path, is_router_disabled=False)
     environment = service["environment"]
     assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
         "true",
@@ -138,8 +145,8 @@ async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_of
     assert matter.params["adapter"] == ""
 
 
-async def test_with_an_adapter_reserved_matterjs_server_drives_it_through_bluez(tmp_path, fake_server):
-    service, matter = await matterjs_server(tmp_path, reserved="hci0")
+async def test_without_the_router_matterjs_server_drives_an_adapter_through_bluez(tmp_path, fake_server):
+    service, matter = await matterjs_server(tmp_path, is_router_disabled=True)
     environment = service["environment"]
     assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
         "",
@@ -162,13 +169,10 @@ class LateRouter(FakeBLERouter):
         await super().start()
 
 
-@pytest.mark.parametrize(
-    ("reserved", "waiting"), [(None, ["bulb"]), ("hci0", ["Matter device (enter its pairing code)"])]
-)
-async def test_a_router_coming_up_after_matter_is_taken_without_a_restart(tmp_path, fake_server, reserved, waiting):
+async def test_a_router_coming_up_after_matter_is_taken_without_a_restart(tmp_path, fake_server):
     radio = FakeBLESource("hci1")
     router = LateRouter([radio])
-    runtime, controller = await hub(tmp_path, router, reserved)
+    runtime, controller = await hub(tmp_path, router)
     router.is_let.set()
     async with asyncio.timeout(2):
         while "ble" not in controller.peripherals.bound:
@@ -176,7 +180,7 @@ async def test_a_router_coming_up_after_matter_is_taken_without_a_restart(tmp_pa
 
     radio.advertise("AA", local_name="bulb", service_data={COMMISSIONABLE: bytes([0, 0, 0x0F, 0xF1, 0xFF, 0, 0x80, 0])})
     await asyncio.sleep(0.05)
-    assert by_ble(controller) == waiting
+    assert by_ble(controller) == ["bulb"]
     statuses = cast(RecordingRuntimeOutput, runtime.output).statuses
     assert [status.state for key, status in statuses if key == "matter"].count(PeripheralState.STARTING) == 1
     await runtime.stop()

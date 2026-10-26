@@ -17,8 +17,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from aiohttp import ClientSession
-from majordom_integration_sdk import Endpoint, Peripherals
-from majordom_integration_sdk.controller import Platform
+from majordom_integration_sdk import Endpoint, Peripherals, Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
 from majordom_integration_sdk.testing import RecordingControllerOutput
 from matter_server.client import MatterClient
@@ -115,14 +114,13 @@ async def mvd(request):
 @pytest_asyncio.fixture
 async def matter(mvd):
     """Started MatterController (connected to matter-server) + recording output + repository."""
-    repository = DeviceRepositoryMemory(integration="Matter")
-    output = RecordingControllerOutput()
+    repository = DeviceRepositoryMemory(integration=MatterController.slug())
     platform = Platform(
-        output=output,
-        make_device_repository=lambda integration: repository.session(),
-        documents_folder=Path(tempfile.mkdtemp()),
+        documents_root=Path(tempfile.mkdtemp()),
+        make_device_repository=lambda key: repository.session(),
     )
     controller = MatterController(platform)
+    output = controller.output = RecordingControllerOutput()
     controller.peripherals = Peripherals({"matter": Endpoint("matter", "matter-server", matter_server_url)})
     await controller.start()
     yield controller, output, repository, mvd

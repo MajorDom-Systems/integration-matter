@@ -7,7 +7,7 @@ endpoint, so that cluster's main parameter wins. A tap is simulated the way the 
 
 import asyncio
 import json
-from typing import Any, cast
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -62,30 +62,30 @@ async def _pair(
 ) -> tuple[MatterController, FakeMatterClient, MatterDevice, MatterDeviceState]:
     fake = FakeMatterClient(node=node)
     monkeypatch.setattr("majordom_matter.controller.MatterClient", lambda url, session: fake)
-    deps = build_test_platform()
-    controller = MatterController(deps)
+    controller = MatterController(build_test_platform())
     controller.peripherals = SERVER
+    output = controller.output = RecordingControllerOutput()
     await controller.start()
     async with asyncio.timeout(5):
         while not controller.discoveries:
             await asyncio.sleep(0.02)
     discovery = next(iter(controller.discoveries.values()))
-    async with controller.device_repository() as repo:
+    async with controller.platform.device_repository(controller) as repo:
         await repo.save(
             MatterDeviceState(
                 id=discovery.id,
                 name="Test",
                 room_id=UUID(int=1),
                 transport="IP",
-                integration="Matter",
+                integration="matter",
                 manufacturer=None,
                 parameters=[],
                 integration_data=MatterDeviceIntegrationData(node_id=0),
             )
         )
     await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    device_id = cast(RecordingControllerOutput, deps.output).connected_devices[-1]
-    async with controller.device_repository() as repo:
+    device_id = output.connected_devices[-1]
+    async with controller.platform.device_repository(controller) as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id, MatterDeviceState)
     assert device is not None and state is not None

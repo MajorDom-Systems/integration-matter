@@ -19,6 +19,7 @@ from majordom_integration_sdk import Endpoint, IntegrationError, Peripherals, Pl
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
+from matter_server.client.exceptions import CannotConnect
 from matter_server.common.errors import UnknownError
 
 from majordom_matter import MatterController
@@ -695,3 +696,43 @@ async def test_stopping_matter_reports_no_error(monkeypatch):
     await controller.stop()
     await asyncio.sleep(0.1)
     assert cast(RecordingControllerOutput, controller.output).error_log == []
+
+
+async def test_stopping_matter_after_a_first_start_that_couldnt_connect_closes_its_session(monkeypatch):
+    server = FakeMatterServer()
+    server.up = False  # its port answers, its /ws doesn't yet
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
+    controller = _matter(build_test_platform())
+    with pytest.raises(CannotConnect):
+        await controller.start()
+    session = controller._matter_client_session
+    await controller.stop()  # as the runtime does after a failed start
+    assert session.closed
+
+
+async def test_stopping_matter_before_it_started(monkeypatch):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    await _matter(build_test_platform()).stop()  # the runtime stops one whose start never ran
+
+
+async def test_stopping_matter_closes_its_session_though_the_client_fails_to_disconnect(monkeypatch):
+    async def failing(self: FakeMatterClient):
+        raise ConnectionResetError("matterjs-server reset the connection")
+
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    monkeypatch.setattr(FakeMatterClient, "disconnect", failing)
+    controller = _matter(build_test_platform())
+    await controller.start()
+    session = controller._matter_client_session
+    with pytest.raises(ConnectionResetError):
+        await controller.stop()
+    assert session.closed
+
+
+async def test_a_stopped_matter_says_it_isnt_started(controller):
+    ctrl, _ = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    discovery = next(iter(ctrl.discoveries.values()))
+    await ctrl.stop()
+    with pytest.raises(MatterConnectionError):
+        await ctrl.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))

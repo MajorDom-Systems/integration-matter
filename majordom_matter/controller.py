@@ -63,7 +63,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
     # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
     needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], is_required=False)]
 
-    _matter_client: MatterClient
+    _matter_client: MatterClient | None = None  # once connected, until stop()
     _matter_client_session: ClientSession
     _majordom_descoveries: dict[UUID, Discovery]
     _mapper: MatterMapper
@@ -133,8 +133,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         # Networks new devices get commissioned onto.
         await self._hand_over_networks()
 
+        client = self._require_matter_client()
         device_nodes: list[int] = []
-        nodes = {node.node_id: node for node in self._matter_client.get_nodes()}  # get_node raises for a missing one
+        nodes = {node.node_id: node for node in client.get_nodes()}  # get_node raises for a missing one
         async with self.platform.device_repository(self) as device_repository:
             for device in await device_repository.get_all(as_=MatterDevice):
                 if node := nodes.get(device.integration_data.node_id):
@@ -145,7 +146,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     device.last_error = f"Device {device.name} is no longer connected to the Matter network"
                     await device_repository.save(device, device.id)
 
-            for node in self._matter_client.get_nodes():
+            for node in client.get_nodes():
                 if node.node_id in device_nodes:
                     continue
                 discovery_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
@@ -168,6 +169,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
     async def stop(self):
         self._majordom_descoveries.clear()
+        client, self._matter_client = self._matter_client, None
 
         if cancel := getattr(self, "_ble_cancel", None):
             cancel()
@@ -204,11 +206,12 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         # one may have ended with an error long ago (a listener _stay_connected got over): it must not cut stop() short
         await asyncio.gather(*background_tasks, return_exceptions=True)
 
-        client = getattr(self, "_matter_client", None)  # none before a first connection
-        if not self._matter_client_session or not client:
-            return
-        await client.disconnect()
-        await self._matter_client_session.close()
+        try:
+            if client:  # none before a first connection
+                await client.disconnect()
+        finally:
+            if session := getattr(self, "_matter_client_session", None):  # none before a first start
+                await session.close()
 
     @override
     async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
@@ -239,9 +242,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
     async def _hand_over_networks(self):
         if wifi := self.platform.wifi:
-            await self._matter_client.set_wifi_credentials(wifi.ssid, wifi.password)
+            await self._require_matter_client().set_wifi_credentials(wifi.ssid, wifi.password)
         if dataset := self.platform.thread_dataset:
-            await self._matter_client.set_thread_operational_dataset(dataset)
+            await self._require_matter_client().set_thread_operational_dataset(dataset)
 
     def _lend_router(self, router: BLERouter):
         # matterjs-server commissions over Bluetooth through the hub's radios, not its own
@@ -323,8 +326,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         setup PIN, which only commission_on_network takes and which carries no discriminator
         for finding a BLE-only device.
         """
+        client = self._require_matter_client()
         if value.strip().upper().startswith("MT:"):
-            return await self._matter_client.commission_with_code(value.strip(), network_only=network_only)
+            return await client.commission_with_code(value.strip(), network_only=network_only)
         digits = "".join(char for char in value if char.isdigit())
         match len(digits):
             case 8:
@@ -333,9 +337,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                         "A raw 8-digit setup PIN only works for devices already on the network; "
                         "enter the 11-digit manual pairing code or scan the QR code for a Bluetooth device"
                     )
-                return await self._matter_client.commission_on_network(int(digits))
+                return await client.commission_on_network(int(digits))
             case 11 | 21:
-                return await self._matter_client.commission_with_code(digits, network_only=network_only)
+                return await client.commission_with_code(digits, network_only=network_only)
             case _:
                 raise ValueError(
                     f"Unrecognised Matter pairing code ({len(digits)} digits): expected an 11- or 21-digit "
@@ -458,7 +462,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         node = self._require_node(device)
         for endpoint_id in node.endpoints:
             if node.has_cluster(3, endpoint_id):
-                await self._matter_client.send_device_command(device.node_id, endpoint_id, command)
+                await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
         node = self._require_node(device)
@@ -508,7 +512,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     cluster_command = self._state_toggle_command(
                         node, endpoint_id, cluster, attribute_id, command.value
                     )
-                    await self._matter_client.send_device_command(
+                    await self._require_matter_client().send_device_command(
                         node.node_id,
                         endpoint_id,
                         cluster_command,
@@ -559,7 +563,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         # discovery + SDK for pairing" split is used exactly where it adds value.
         while True:
             try:
-                nodes: list[CommissionableNodeData] = await self._matter_client.discover_commissionable_nodes()
+                client = self._require_matter_client()
+                nodes: list[CommissionableNodeData] = await client.discover_commissionable_nodes()
                 for node in nodes:
                     await self._async_matter_did_discover(node)
             except Exception as e:
@@ -685,6 +690,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         Uses _make_callback to capture (device_id, parameter_id) by value —
         without it all callbacks would share the last loop iteration's values.
         """
+        client = self._require_matter_client()
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, cluster in endpoint.clusters.items():
                 if not hasattr(cluster, "Attributes"):
@@ -696,7 +702,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     parameter_id = self._mapper.attribute_parameter_uuid(
                         device_id, endpoint_id, cluster_id, attribute.attribute_id
                     )
-                    self._matter_client.subscribe_events(
+                    client.subscribe_events(
                         self._make_callback(device_id, parameter_id, cluster_id, attribute.attribute_id),
                         EventType.ATTRIBUTE_UPDATED,
                         node.node_id,
@@ -708,7 +714,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         # other node-info changes, so track the last known value and only act on a real
         # transition instead of re-signalling on every unrelated update.
         self._node_availability[device_id] = node.available
-        self._matter_client.subscribe_events(
+        client.subscribe_events(
             self._make_availability_callback(device_id),
             EventType.NODE_UPDATED,
             node.node_id,
@@ -786,11 +792,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     command.device_id, endpoint_id, cluster.id, command_id, cmd_class, arguments
                 )
                 data = self._mapper.parse_data_for_command(cmd_class, arguments)
-                await self._matter_client.send_device_command(
+                await self._require_matter_client().send_device_command(
                     node.node_id, endpoint_id, cmd_class(**data), timed_request_timeout_ms=time_requested_timeout
                 )
             else:
-                await self._matter_client.send_device_command(
+                await self._require_matter_client().send_device_command(
                     node.node_id, endpoint_id, cmd_class(), timed_request_timeout_ms=time_requested_timeout
                 )
             return
@@ -855,7 +861,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         )
 
         value = self._mapper.parse_data_for_attribute(attribute_cls, command.value) if attribute_cls else command.value
-        await self._matter_client.write_attribute(node.node_id, attribute_path, value)
+        await self._require_matter_client().write_attribute(node.node_id, attribute_path, value)
 
     def _get_main_parameter(
         self, device_id: UUID, node: MatterNode, parameters: list[ParameterState[MatterParameterIntegrationData]]

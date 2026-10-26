@@ -64,7 +64,7 @@ async def _commission(controller) -> UUID:
     return controller.output.connected_devices[-1]
 
 
-async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials) -> None:
+async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials | None) -> None:
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(
             MatterDeviceState(
@@ -544,6 +544,25 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
     async with controller.platform.device_repository(controller) as repo:
         device = await repo.get(UUID(int=7), as_=MatterDevice)
         assert device is not None and device.available is False
+    await controller.stop()
+
+
+@pytest.mark.parametrize("credentials", [None, ProvidedCredentials(type=CredentialsType.none)])
+async def test_a_node_on_the_fabric_without_a_device_is_added_as_it_is(monkeypatch, credentials):
+    server = FakeMatterServer()
+    server.commissioned = True  # by a pairing that ended before its device was saved, or a device deleted since
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
+    controller = _matter(build_test_platform())
+    await controller.start()
+    (discovery,) = controller.discoveries.values()
+    assert discovery.expected_credentials_options == [CredentialsType.none]
+
+    await _pair(controller, discovery, credentials)
+    async with controller.platform.device_repository(controller) as repo:
+        device = await repo.get(discovery.id, as_=MatterDevice)
+    assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
+    assert cast(RecordingControllerOutput, controller.output).connected_devices == [discovery.id]
+    assert controller.discoveries == {}
     await controller.stop()
 
 

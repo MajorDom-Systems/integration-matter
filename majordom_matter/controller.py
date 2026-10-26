@@ -332,32 +332,12 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 )
 
     async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None):
-        self._require_matter_client()
-
-        if not credentials or credentials.type not in discovery.expected_credentials_options:
-            raise MatterUnexpectedError(
-                f"Credentials type {credentials.type if credentials else None!r} is not one of the "
-                f"types this discovery advertised: {discovery.expected_credentials_options}"
-            )
-
-        # Every commissioning path below needs the pairing code/QR payload; a missing value is an
-        # unexpected caller error, not something to stringify into "None" or crash on int(None).
-        if credentials.value is None:
-            raise MatterUnexpectedError("Matter commissioning requires a pairing code, but none was provided")
-
-        # matterjs-server may run without a Bluetooth adapter; then a non-network_only commission fails
-        # with "Bluetooth commissioning is not available", so only BLE discoveries may use BLE.
-        network_only = discovery.transport != "BLE"
-
-        # Compare by value (==), not identity (is): `credentials.type` can arrive through a
-        # schema layer that resolved CredentialsType via a different import path, yielding a
-        # distinct enum class where `is` would never match. `==` on a str-enum compares the
-        # underlying value and is robust to that (and semantically what we want anyway).
-        if credentials.type not in (CredentialsType.qr, CredentialsType.code):
-            raise MatterUnexpectedError("This credentials type is not supported")
-        commission_node = await self._commission(str(credentials.value), network_only=network_only)
-
-        node = self._matter_client.get_node(commission_node.node_id)
+        client = self._require_matter_client()
+        # a node on the fabric without a device (a pairing that ended before the save, a device deleted since) is
+        # offered under its device id and taken as it is; any other discovery is commissioned with its code
+        on_fabric = {self._mapper.device_uuid(n.node_id, n.device_info.productName): n for n in client.get_nodes()}
+        if (node := on_fabric.get(discovery.id)) is None:
+            node = client.get_node((await self._commission_discovery(discovery, credentials)).node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
         async with self.platform.device_repository(self) as device_repository:
@@ -429,6 +409,32 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         await self.output.controller_did_connect_device(self, device_id)
         self._subscription(device_id, node)
         return device_id
+
+    async def _commission_discovery(
+        self, discovery: Discovery, credentials: ProvidedCredentials | None
+    ) -> MatterNodeData:
+        if not credentials or credentials.type not in discovery.expected_credentials_options:
+            raise MatterUnexpectedError(
+                f"Credentials type {credentials.type if credentials else None!r} is not one of the "
+                f"types this discovery advertised: {discovery.expected_credentials_options}"
+            )
+
+        # Every commissioning path below needs the pairing code/QR payload; a missing value is an
+        # unexpected caller error, not something to stringify into "None" or crash on int(None).
+        if credentials.value is None:
+            raise MatterUnexpectedError("Matter commissioning requires a pairing code, but none was provided")
+
+        # matterjs-server may run without a Bluetooth adapter; then a non-network_only commission fails
+        # with "Bluetooth commissioning is not available", so only BLE discoveries may use BLE.
+        network_only = discovery.transport != "BLE"
+
+        # Compare by value (==), not identity (is): `credentials.type` can arrive through a
+        # schema layer that resolved CredentialsType via a different import path, yielding a
+        # distinct enum class where `is` would never match. `==` on a str-enum compares the
+        # underlying value and is robust to that (and semantically what we want anyway).
+        if credentials.type not in (CredentialsType.qr, CredentialsType.code):
+            raise MatterUnexpectedError("This credentials type is not supported")
+        return await self._commission(str(credentials.value), network_only=network_only)
 
     async def unpair(self, device: MatterDevice):
         client = self._require_matter_client()

@@ -689,6 +689,24 @@ async def test_a_matter_server_dropping_every_connection_after_its_node_list_is_
     assert output.error_log[:2] == [lost_server, "server-unreachable"]
 
 
+async def test_a_matter_server_dropping_every_connection_is_tried_less_and_less_often(controller, monkeypatch):
+    ctrl, _ = controller
+    connections = 0
+
+    async def dropping(self: FakeMatterClient, init_ready: asyncio.Event | None = None):
+        nonlocal connections
+        connections += 1
+        if init_ready is not None:
+            init_ready.set()  # its node list, then it drops
+
+    monkeypatch.setattr(FakeMatterClient, "start_listening", dropping)
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.lose()
+    server.restore()
+    await asyncio.sleep(0.3)
+    assert connections <= 6  # one outage: back after 0.01, 0.03, 0.07, 0.15 s, not every 10 ms
+
+
 async def test_a_matter_server_lost_again_soon_after_it_came_back_is_reported_at_once(controller, monkeypatch):
     ctrl, output = controller
     monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.3)

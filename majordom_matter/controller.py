@@ -96,7 +96,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     # via the Bluetooth router instead.
     _MATTER_COMMISSIONABLE_SERVICE = UUID("0000fff6-0000-1000-8000-00805f9b34fb")
 
-    _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
+    _RECONNECT_DELAY = 1.0  # doubles per attempt until a connection holds, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
     _UNREACHABLE_AFTER = 15.0  # of outage before the user hears of it: a container recreated on purpose is back by then
     # an outage is over only once a reconnect held this long, so drops in a row add up: a matterjs-server that sends its
@@ -332,13 +332,12 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
                 failed_at = loop.time()
                 if outage_since is None or failed_at - connected_at >= self._STABLE_CONNECTION:
-                    outage_since = failed_at  # a new outage
+                    outage_since, delay = failed_at, self._RECONNECT_DELAY  # a new outage, else its delay grows on
                 for device_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
                     if available:
                         await self.output.controller_did_lose_device(self, device_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
-                delay = self._RECONNECT_DELAY
                 is_reported = False
                 while True:
                     # on each failure, the drop too: one soon after a reconnect is the same outage
@@ -349,13 +348,13 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                         await self.output.controller_did_encounter_error(self, error)
                         is_reported = True
                     await asyncio.sleep(delay)
+                    delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
                     try:
                         listener = await self._connect()
                         break
                     except self._CONNECTION_ERRORS as e:  # also a connection dropped before matterjs-server spoke
                         failed_at = loop.time()
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
-                        delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
                 await self._sync_with_server()
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
                 if is_reported:  # the devices work again; the outage goes on until the connection held

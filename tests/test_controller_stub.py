@@ -829,6 +829,26 @@ async def test_stopping_matter_reports_no_error(monkeypatch):
     assert cast(RecordingControllerOutput, controller.output).error_log == []
 
 
+async def test_stopping_matter_ends_the_reports_a_device_started(controller):
+    ctrl, _ = controller
+    await _commission(ctrl)
+    is_reporting, is_ended = asyncio.Event(), asyncio.Event()
+
+    class Hung(RecordingControllerOutput):
+        async def controller_did_receive_events(self, controller: AbstractController, events: Any):
+            is_reporting.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                is_ended.set()
+
+    ctrl.output = Hung()
+    cast(FakeMatterClient, ctrl._matter_client).fire_attribute_update("13/6/0", True)
+    await asyncio.wait_for(is_reporting.wait(), 1)
+    await ctrl.stop()
+    assert is_ended.is_set()
+
+
 async def test_stopping_matter_after_a_first_start_that_couldnt_connect_closes_its_session(monkeypatch):
     server = FakeMatterServer()
     server.up = False  # its port answers, its /ws doesn't yet

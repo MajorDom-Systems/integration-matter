@@ -2,8 +2,8 @@ import asyncio
 import contextlib
 import inspect
 import logging
-from collections.abc import Generator
-from typing import override
+from collections.abc import Coroutine, Generator
+from typing import Any, override
 from uuid import UUID
 
 from aiohttp import ClientError, ClientSession
@@ -264,9 +264,13 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
         if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
             # in a task: the runtime waits for this hook, while matterjs-server may be away or not answer
-            self._background_tasks = [task for task in self._background_tasks if not task.done()]
-            self._background_tasks.append(asyncio.create_task(self._hand_over_networks()))
+            self._spawn(self._hand_over_networks())
         return True
+
+    def _spawn(self, coroutine: Coroutine[Any, Any, None]):
+        """Runs it in a task stop() ends; kept, as the event loop holds its tasks only weakly."""
+        self._background_tasks = [task for task in self._background_tasks if not task.done()]
+        self._background_tasks.append(asyncio.create_task(coroutine))
 
     async def _hand_over_networks(self):
         """A network matterjs-server refuses is only logged: Matter still serves every device it has, and still
@@ -798,7 +802,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     cluster_id, attribute_id, self._mapper.parse_raw_attribute(cluster_id, attribute_id, new_value)
                 ),
             )
-            asyncio.create_task(self.output.controller_did_receive_events(self, [event]))
+            self._spawn(self.output.controller_did_receive_events(self, [event]))
 
         return callback
 
@@ -810,9 +814,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 return
             self._node_availability[device_id] = is_available
             if is_available:
-                asyncio.create_task(self.output.controller_did_connect_device(self, device_id))
+                self._spawn(self.output.controller_did_connect_device(self, device_id))
             else:
-                asyncio.create_task(self.output.controller_did_lose_device(self, device_id))
+                self._spawn(self.output.controller_did_lose_device(self, device_id))
 
         return callback
 

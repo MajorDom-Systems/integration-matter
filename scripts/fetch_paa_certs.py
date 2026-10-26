@@ -34,7 +34,7 @@ async def _resilient_write(*args, **kwargs):
 paa.write_paa_root_cert = _resilient_write  # ty: ignore[invalid-assignment]  # monkeypatch, module global
 
 
-async def main() -> None:
+async def main():
     dest = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("matter_data/credentials")
     dest.mkdir(parents=True, exist_ok=True)
     (dest / ".version").unlink(missing_ok=True)  # force a full fetch

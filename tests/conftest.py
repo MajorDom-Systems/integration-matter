@@ -59,7 +59,7 @@ async def _start_mvd(device_type: str = "on-off-light") -> subprocess.Popen:
     return proc
 
 
-def _kill_mvd(proc: subprocess.Popen) -> None:
+def _kill_mvd(proc: subprocess.Popen):
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except ProcessLookupError:
@@ -74,11 +74,11 @@ def _kill_mvd(proc: subprocess.Popen) -> None:
             pass
 
 
-async def _stop_mvd(proc: subprocess.Popen) -> None:
+async def _stop_mvd(proc: subprocess.Popen):
     await asyncio.get_running_loop().run_in_executor(None, _kill_mvd, proc)
 
 
-async def _unpair_all() -> None:
+async def _unpair_all():
     """Remove every node from matter-server so each test starts from a clean fabric."""
     session = ClientSession()
     client = MatterClient(f"{matter_server_url}/ws", session)

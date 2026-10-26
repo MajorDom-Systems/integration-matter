@@ -6,7 +6,7 @@ from matter_server.common.models import EventMessage, EventType
 
 class MatterClient(_MatterClient):
     @override
-    def _handle_event_message(self, msg: EventMessage) -> None:
+    def _handle_event_message(self, msg: EventMessage):
         # matterjs-server may report a just-commissioned node's attributes before announcing the node (whose
         # announcement carries them). Upstream raises KeyError on those, which ends listening and cancels the
         # commissioning call that's still waiting for its result.

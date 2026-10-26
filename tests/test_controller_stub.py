@@ -64,7 +64,7 @@ async def _commission(controller) -> UUID:
     return controller.output.connected_devices[-1]
 
 
-async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials | None) -> None:
+async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials | None):
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(
             MatterDeviceState(
@@ -635,7 +635,7 @@ async def test_stopping_matter_while_it_reconnects(monkeypatch):
 
 async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypatch):
     class GoneAtOnce(FakeMatterClient):
-        async def start_listening(self, init_ready: asyncio.Event | None = None) -> None:
+        async def start_listening(self, init_ready: asyncio.Event | None = None):
             return None
 
     monkeypatch.setattr("majordom_matter.controller.MatterClient", GoneAtOnce)

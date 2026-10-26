@@ -11,7 +11,7 @@ import contextlib
 import json
 import logging
 import struct
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -49,7 +49,7 @@ def _b64(data: bytes) -> str:
 
 
 @contextlib.contextmanager
-def _gatt(error: str) -> Iterator[None]:
+def _gatt(error: str) -> Generator[None]:
     """Answers a failing GATT operation as ``error``, however its source failed (bleak, aioesphomeapi, a lost link)."""
     try:
         yield

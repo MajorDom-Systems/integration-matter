@@ -59,12 +59,12 @@ class FakeMatterServer:
         self.is_answering = True  # False: a call waits for its answer until the server goes away
         self.gone = asyncio.Event()  # set when this run of the server goes away
 
-    def lose(self) -> None:
+    def lose(self):
         """Go away, like its container restarting: listening clients end, new ones can't connect."""
         self.up = False
         self.gone.set()
 
-    def restore(self) -> None:
+    def restore(self):
         self.up = True
         self.gone = asyncio.Event()
 
@@ -99,26 +99,26 @@ class FakeMatterClient:
         self._server_gone = self.server.gone
 
     # --- lifecycle ---
-    async def connect(self) -> None:
+    async def connect(self):
         if not self.server.up:
             raise CannotConnect(ConnectionRefusedError("matterjs-server is down"))
         self._server_gone = self.server.gone
 
-    async def start_listening(self, init_ready: asyncio.Event | None = None) -> None:
+    async def start_listening(self, init_ready: asyncio.Event | None = None):
         if init_ready is not None:
             init_ready.set()
         # The real client runs its websocket loop until matterjs-server goes away (`lose_server()`);
         # block until then or until the controller's stop() cancels this task.
         await self._server_gone.wait()
 
-    async def disconnect(self) -> None:
+    async def disconnect(self):
         return None
 
-    async def set_wifi_credentials(self, ssid: str, credentials: str) -> None:
+    async def set_wifi_credentials(self, ssid: str, credentials: str):
         await self._answer()
         self.networks["wifi"] = (ssid, credentials)
 
-    async def set_thread_operational_dataset(self, dataset: str) -> None:
+    async def set_thread_operational_dataset(self, dataset: str):
         await self._answer()
         self.networks["thread"] = dataset
 
@@ -138,7 +138,7 @@ class FakeMatterClient:
             return self._node
         raise NodeNotExists(f"Node {node_id} does not exist or is not yet interviewed")  # as the real client
 
-    async def remove_node(self, node_id: int) -> None:
+    async def remove_node(self, node_id: int):
         if not (self.server.commissioned and node_id == self._node.node_id):
             raise NodeNotExists(f"Node {node_id} does not exist")  # as matterjs-server answers
         self.removed_nodes.append(node_id)
@@ -171,7 +171,7 @@ class FakeMatterClient:
         return self._node.node_data
 
     # --- commands / attributes ---
-    async def send_device_command(self, node_id: int, endpoint_id: int, command: Any, **kwargs: Any) -> None:
+    async def send_device_command(self, node_id: int, endpoint_id: int, command: Any, **kwargs: Any):
         self.sent_commands.append((node_id, endpoint_id, command))
         return None
 
@@ -187,23 +187,23 @@ class FakeMatterClient:
         sub = _Subscription(callback, event_filter, node_filter, attr_path_filter)
         self._subscriptions.append(sub)
 
-        def unsubscribe() -> None:
+        def unsubscribe():
             if sub in self._subscriptions:
                 self._subscriptions.remove(sub)
 
         return unsubscribe
 
     # --- test helpers ---
-    def lose_server(self) -> None:
+    def lose_server(self):
         """Simulate matterjs-server going away (its container restarting): listening ends, as the real client's does."""
         self.server.lose()
 
-    def fire_attribute_update(self, attribute_path: str, value: Any) -> None:
+    def fire_attribute_update(self, attribute_path: str, value: Any):
         """Simulate the device pushing a new attribute value to its subscribers."""
         self._node.update_attribute(attribute_path, value)
         self._emit(EventType.ATTRIBUTE_UPDATED, self._node.node_id, attribute_path, value)
 
-    def _emit(self, event_type: EventType, node_id: int, attribute_path: str, value: Any) -> None:
+    def _emit(self, event_type: EventType, node_id: int, attribute_path: str, value: Any):
         for sub in list(self._subscriptions):
             if sub.event_filter is not None and sub.event_filter != event_type:
                 continue

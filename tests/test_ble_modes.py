@@ -9,7 +9,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from majordom_integration_sdk import AbstractController, Discovery, Endpoint, Peripherals
+from majordom_integration_sdk import AbstractController, Discovery, Endpoint, PeripheralChange, Peripherals
 from majordom_integration_sdk.runtime import MemoryDisabledStore, PeripheralState, Runtime
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import (
@@ -125,6 +125,16 @@ async def test_the_pairing_code_is_offered_again_once_the_device_it_paired_is_sa
     await controller.pair_device(by_code, ProvidedCredentials(type=CredentialsType.code, value="3497-011-2332"))
     assert is_row_there == [False]  # a pairing started from it at once would save its row under a taken id
     await controller.stop()
+
+
+async def test_with_an_adapter_of_its_own_it_keeps_running_as_the_router_it_doesnt_use_goes(fake_server):
+    router = FakeBLERouter([FakeBLESource("hci1")])
+    await router.start()
+    controller = await started(router, replace(SERVER, params={"adapter": "hci0"}))
+    controller.peripherals = Peripherals({"matter": controller.peripherals.endpoint("matter")})
+    assert await controller.needed_peripheral_did_change(PeripheralChange("ble", router.endpoint, None))
+    await controller.stop()
+    await router.stop()
 
 
 async def hub(

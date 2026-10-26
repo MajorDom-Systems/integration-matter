@@ -207,11 +207,15 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         await self._matter_client_session.close()
 
     async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
-        """The router coming up once Matter runs is taken as at the start, in place; anything else restarts Matter."""
-        if change.family != "ble" or change.before is not None:
+        """The router coming up once Matter runs is taken as at the start, in place, and with an adapter of its own
+        matterjs-server doesn't use the router at all; anything else restarts Matter."""
+        if change.family != "ble":
             return False
-        if not self.peripherals.endpoint("matter").params.get("adapter"):
-            self._lend_router(self.peripherals.instance("ble"))
+        if self.peripherals.endpoint("matter").params.get("adapter"):
+            return True
+        if change.before is not None:
+            return False
+        self._lend_router(self.peripherals.instance("ble"))
         return True
 
     async def platform_facts_did_change(self, before: Platform) -> bool:

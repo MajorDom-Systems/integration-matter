@@ -37,9 +37,6 @@ class MatterParameterIntegrationData(BaseModel):
 class MatterDevice(Device[MatterDeviceIntegrationData]):
     @property
     def node_id(self) -> int:
-        assert self.integration_data
-        if isinstance(self.integration_data, dict):
-            return self.integration_data["node_id"]
         return self.integration_data.node_id
 
 

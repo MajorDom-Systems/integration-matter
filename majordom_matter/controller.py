@@ -42,7 +42,6 @@ from .matter_spec import (
 )
 from .model import (
     MatterDevice,
-    MatterDeviceIntegrationData,
     MatterDeviceState,
     MatterParameter,
     MatterParameterIntegrationData,
@@ -411,10 +410,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             # Persist the commissioned node id — the Hub seeds a provisional device whose
             # integration_data already exists (so it's never falsy), and later reconnects look
             # the node up by this id, so set it unconditionally rather than only when absent.
-            if device.integration_data:
-                device.integration_data.node_id = node.node_id
-            else:
-                device.integration_data = MatterDeviceIntegrationData(node_id=node.node_id)
+            device.integration_data.node_id = node.node_id
 
             for endpoint_id, endpoint in node.endpoints.items():
                 for cluster_id, cluster in endpoint.clusters.items():

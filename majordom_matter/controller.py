@@ -480,6 +480,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
         # only now that the Hub's row under its id moved to the device's: a pairing started from it saves one there
         self._majordom_descoveries.pop(discovery.id, None)
+        # a pairing landing after stop() keeps its device rather than failing: the node is commissioned onto the fabric
+        # and its row saved already, so failing it would leave a node no device stands for
         if self._matter_client is None:
             return device_id  # Matter stopped meanwhile: its next start follows the device
         if discovery.id == self._by_code_id:

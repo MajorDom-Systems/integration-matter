@@ -15,7 +15,14 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from majordom_integration_sdk import Endpoint, IntegrationError, Peripherals, Platform, WifiCredentials
+from majordom_integration_sdk import (
+    AbstractController,
+    Endpoint,
+    IntegrationError,
+    Peripherals,
+    Platform,
+    WifiCredentials,
+)
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
@@ -26,7 +33,7 @@ from majordom_matter import MatterController
 from majordom_matter.exceptions import MatterConnectionError
 from majordom_matter.mapper import MatterMapper
 from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
-from majordom_matter.testing import FakeMatterClient, FakeMatterServer
+from majordom_matter.testing import FakeMatterClient, FakeMatterServer, load_on_off_light_node
 
 FAKE_NODE_ID = 46  # matches fixtures/on_off_light_node.json
 
@@ -764,3 +771,61 @@ async def test_a_stopped_matter_says_it_isnt_started(controller):
     await ctrl.stop()
     with pytest.raises(MatterConnectionError):
         await ctrl.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+
+
+async def test_a_reconnect_that_breaks_reports_matter_crashed(controller):
+    ctrl, _ = controller
+    await _commission(ctrl)
+
+    class Locked(RecordingControllerOutput):
+        async def controller_did_lose_device(self, controller: AbstractController, device_id: UUID):
+            raise RuntimeError("database is locked")  # the Hub's
+
+    output = ctrl.output = Locked()
+    cast(FakeMatterClient, ctrl._matter_client).lose_server()
+    await _wait(lambda: "crashed" in output.errors)
+    assert not output.errors["crashed"].is_still_running  # the runtime restarts Matter
+
+
+async def test_a_failure_other_than_an_outage_on_reconnect_reports_matter_crashed(controller, monkeypatch):
+    ctrl, output = controller
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+
+    def unreadable(self: FakeMatterClient) -> list:
+        raise RuntimeError("unreadable node dump")
+
+    monkeypatch.setattr(FakeMatterClient, "get_nodes", unreadable)
+    lost.lose_server()
+    lost.server.restore()
+    await _wait(lambda: "crashed" in output.errors)
+    assert "server-unreachable" not in output.errors  # not an outage: no reconnecting forever
+
+
+async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_reconnecting(controller, monkeypatch):
+    ctrl, output = controller
+    first = await _commission(ctrl)
+    second = load_on_off_light_node()
+    second.node_data.node_id = FAKE_NODE_ID + 1  # on the fabric without a device: added as it is
+    on_fabric = FakeMatterClient.get_nodes
+    monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), second])
+    second_id = ctrl._mapper.device_uuid(second.node_id, second.device_info.productName)
+    discovery = output.received_discoveries[0].model_copy(
+        update={"id": second_id, "expected_credentials_options": [CredentialsType.none]}
+    )
+    ctrl.discoveries[second_id] = discovery  # as offered at a start
+
+    is_reporting = asyncio.Event()
+
+    class Slow(RecordingControllerOutput):
+        async def controller_did_lose_device(self, controller: AbstractController, device_id: UUID):
+            is_reporting.set()
+            await asyncio.sleep(0.1)  # the Hub's write and send
+
+    output = ctrl.output = Slow()
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost.lose_server()
+    await asyncio.wait_for(is_reporting.wait(), 1)
+    await _pair(ctrl, discovery, None)  # quick: nothing to commission
+    lost.server.restore()
+    await _wait(lambda: set(output.connected_devices) == {first, discovery.id} and ctrl._matter_client is not lost)
+    assert output.error_log == []

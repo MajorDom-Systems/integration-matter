@@ -166,7 +166,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 )
                 self._majordom_descoveries[discovery_id] = discovery
                 await self.output.controller_did_receive_discovery(self, discovery)
-        for device_id, available in self._node_availability.items():  # the Hub, or a lost server, made them unavailable
+        # the Hub, or a lost server, made them unavailable; a copy: a pairing may land meanwhile
+        for device_id, available in list(self._node_availability.items()):
             if available:
                 await self.output.controller_did_connect_device(self, device_id)
 
@@ -291,7 +292,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     await listener
                 except Exception as e:
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
-                for device_id, available in self._node_availability.items():
+                for device_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
                     if available:
                         await self.output.controller_did_lose_device(self, device_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
@@ -302,10 +303,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     await asyncio.sleep(delay)
                     try:
                         listener = await self._connect()
-                        await self._sync_with_server()
                         break
-                    except Exception as e:
-                        listener.cancel()
+                    except self._CONNECTION_ERRORS as e:
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
                         if not is_reported:
                             error = IntegrationError(
@@ -314,9 +313,16 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                             await self.output.controller_did_encounter_error(self, error)
                             is_reported = True
                         delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
+                await self._sync_with_server()
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
                 if is_reported:
                     await self.output.controller_did_resolve_error(self, "server-unreachable")
+        except Exception:  # a bug rather than an outage: the runtime restarts Matter, then gives up on it
+            logging.exception(f"[{self.name}] stopped following matterjs-server")
+            message = "The connection to the Matter server broke unexpectedly."
+            await self.output.controller_did_encounter_error(
+                self, IntegrationError("crashed", message, is_still_running=False)
+            )
         finally:
             listener.cancel()
 

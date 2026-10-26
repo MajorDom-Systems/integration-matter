@@ -147,10 +147,10 @@ async def test_through_the_router_losing_it_restarts_matter_and_stop_lets_it_go(
     router = FakeBLERouter([FakeBLESource("hci0")])
     await router.start()
     controller = await started(router)
-    assert len(router._listeners) == 1
+    assert len(router.registrations) == 1
     assert not await controller.needed_peripheral_did_change(PeripheralChange("ble", router.endpoint, None))
     await controller.stop()
-    assert router._listeners == []
+    assert router.registrations == []
     await router.stop()
 
 

@@ -31,7 +31,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 
 from majordom_matter import MatterController
-from majordom_matter.exceptions import MatterConnectionError
+from majordom_matter.exceptions import MatterConnectionError, MatterUnexpectedError
 from majordom_matter.mapper import MatterMapper
 from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
 from majordom_matter.testing import FakeMatterClient, FakeMatterServer, load_on_off_light_node
@@ -948,3 +948,21 @@ async def test_a_node_matterjs_server_hasnt_interviewed_doesnt_stop_a_pairing(co
     ctrl, output = controller
     await _commission(ctrl)
     assert output.connected_devices
+
+
+async def test_a_node_a_failed_pairing_commissioned_is_offered_as_it_is_at_once(controller, monkeypatch):
+    ctrl, output = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (commissionable,) = ctrl.discoveries.values()
+
+    def broken(*args: Any):
+        raise MatterUnexpectedError("mapping failed")  # anything after the commissioning
+
+    monkeypatch.setattr(MatterController, "_get_main_parameter", broken)
+    with pytest.raises(MatterUnexpectedError):
+        await _pair(ctrl, commissionable, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    node = cast(FakeMatterClient, ctrl._matter_client).get_node(FAKE_NODE_ID)  # on the fabric now
+    (offered,) = ctrl.discoveries.values()
+    assert offered.id == ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
+    assert offered.expected_credentials_options == [CredentialsType.none]  # added without a code
+    assert output.lost_discoveries == [commissionable.id]  # no longer commissionable

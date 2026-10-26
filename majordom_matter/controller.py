@@ -164,28 +164,31 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 await self.output.controller_did_lose_device(self, device.id)
 
         for node in client.get_nodes():
-            if node.node_id in device_nodes:
-                continue
-            if (discovery_id := self._node_device_id(node)) is None:
-                logging.info(f"[{self.name}] node {node.node_id} isn't interviewed yet: offered at the next start")
-                continue
-            discovery = Discovery(
-                id=discovery_id,
-                integration=NonEmptyStr(self.key),
-                expected_credentials_options=[CredentialsType.none],
-                expiration=None,
-                transport=NonEmptyStr("IP"),
-                device_name=NonEmptyStr(node.device_info.productName or "Unknown"),
-                device_manufacturer=node.device_info.vendorName or str(node.device_info.vendorID),
-                device_category=None,
-                device_icon=None,
-            )
-            self._majordom_descoveries[discovery_id] = discovery
-            await self.output.controller_did_receive_discovery(self, discovery)
+            if node.node_id not in device_nodes:
+                await self._offer_fabric_node(node)
         # the Hub, or a lost server, made them unavailable; a copy: a pairing may land meanwhile
         for device_id, available in list(self._node_availability.items()):
             if available:
                 await self.output.controller_did_connect_device(self, device_id)
+
+    async def _offer_fabric_node(self, node: MatterNode):
+        """A node on the fabric without a device: pair_device adds it as it is, without a code."""
+        if (discovery_id := self._node_device_id(node)) is None:
+            logging.info(f"[{self.name}] node {node.node_id} isn't interviewed yet: offered at the next start")
+            return
+        discovery = Discovery(
+            id=discovery_id,
+            integration=NonEmptyStr(self.key),
+            expected_credentials_options=[CredentialsType.none],
+            expiration=None,
+            transport=NonEmptyStr("IP"),
+            device_name=NonEmptyStr(node.device_info.productName or "Unknown"),
+            device_manufacturer=node.device_info.vendorName or str(node.device_info.vendorID),
+            device_category=None,
+            device_icon=None,
+        )
+        self._majordom_descoveries[discovery_id] = discovery
+        await self.output.controller_did_receive_discovery(self, discovery)
 
     async def stop(self):
         self._majordom_descoveries.clear()
@@ -380,10 +383,22 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         # a node on the fabric without a device (a pairing that ended before the save, a device deleted since) is
         # offered under its device id and taken as it is; any other discovery is commissioned with its code
         on_fabric = {self._node_device_id(n): n for n in client.get_nodes()}
-        if (node := on_fabric.get(discovery.id)) is None:
-            with _answered("the pairing"):
-                commissioned = await self._commission_discovery(discovery, credentials)
-            node = client.get_node(commissioned.node_id)
+        if (node := on_fabric.get(discovery.id)) is not None:
+            return await self._add_device(discovery, node)
+        with _answered("the pairing"):
+            commissioned = await self._commission_discovery(discovery, credentials)
+        node = client.get_node(commissioned.node_id)
+        try:
+            return await self._add_device(discovery, node)
+        except Exception:  # on the fabric now, no longer commissionable: offered as it is
+            if discovery.id != self._by_code_id:
+                self._majordom_descoveries.pop(discovery.id, None)
+                await self.output.controller_did_lose_discovery(self, discovery.id)
+            await self._offer_fabric_node(node)
+            raise
+
+    async def _add_device(self, discovery: Discovery, node: MatterNode) -> UUID:
+        """Maps a node on the fabric to the device the Hub seeded under the discovery's id, and follows it."""
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
         async with self.platform.device_repository(self) as device_repository:

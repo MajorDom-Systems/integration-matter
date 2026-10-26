@@ -24,6 +24,10 @@ def test_provides_its_base_url_on_the_allocated_port():
     assert provided.url.format(ports=PORTS) == "ws://127.0.0.1:45812"  # the API at /ws, BLE at /ble
 
 
+def test_listens_on_loopback_only():
+    assert matterjs_server().compose["environment"]["LISTEN_ADDRESS"] == "127.0.0.1"
+
+
 def test_the_controller_needs_the_router_not_the_hosts_bluetooth():
     ble = next(need for need in MatterController.needs if need.family == "ble")
     assert ble.accepts(Endpoint("ble", "router", "router", is_shared=True))

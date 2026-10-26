@@ -476,7 +476,7 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
 
 
 async def _refuse(self: FakeMatterClient, *args: Any):
-    raise UnknownError("Invalid Thread dataset")  # matterjs-server answers with an error
+    raise UnknownError("refused")  # matterjs-server answers with an error
 
 
 async def test_a_network_matterjs_server_refuses_at_start_leaves_matter_running(monkeypatch):
@@ -889,7 +889,7 @@ async def _pairing_in_flight(ctrl: MatterController) -> asyncio.Task:
     return pairing
 
 
-async def test_a_pairing_matterjs_server_went_away_from_says_why(controller):
+async def test_a_pairing_cut_short_by_a_lost_matterjs_server_says_why(controller):
     ctrl, _ = controller
     pairing = await _pairing_in_flight(ctrl)
     cast(FakeMatterClient, ctrl._matter_client).lose_server()  # the client cancels the calls waiting for an answer

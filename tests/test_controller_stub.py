@@ -905,6 +905,32 @@ async def test_a_pairing_cancelled_itself_stays_cancelled(controller):
         await pairing
 
 
+@pytest.mark.parametrize(
+    ("call", "during"),
+    [("send_command", "the command"), ("identify", "the identification"), ("unpair", "the unpairing")],
+)
+async def test_a_call_cut_short_by_a_lost_matterjs_server_says_why(controller, call: str, during: str):
+    ctrl, _ = controller
+    device_id = await _commission(ctrl)
+    async with ctrl.platform.device_repository(ctrl) as repo:
+        device = await repo.get(device_id, as_=MatterDevice)
+        state = await repo.state(device_id, MatterDeviceState)
+    toggle = next(p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command)
+    command = DeviceCommand(device_id=device_id, parameter_id=toggle.id, value=None)
+    calls = {
+        "send_command": lambda: ctrl.send_command(command, device, toggle),
+        "identify": lambda: ctrl.identify(device),
+        "unpair": lambda: ctrl.unpair(device),
+    }
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.is_answering = False
+    waiting = asyncio.create_task(calls[call]())
+    await asyncio.sleep(0.05)
+    server.lose()  # the client cancels the calls waiting for an answer
+    with pytest.raises(MatterConnectionError, match=f"ended during {during}$"):
+        await waiting
+
+
 async def test_a_matter_server_gone_during_the_hand_over_on_reconnect_is_reconnected(monkeypatch):
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))

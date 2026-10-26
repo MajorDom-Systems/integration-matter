@@ -500,14 +500,16 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         client = self._require_matter_client()
         # a device that never finished commissioning (or that matterjs-server lost) has no node to remove
         if any(node.node_id == device.node_id for node in client.get_nodes()):
-            await client.remove_node(device.node_id)
+            with _server_call("the unpairing"):
+                await client.remove_node(device.node_id)
 
     async def identify(self, device: MatterDevice):
         command = Identify.Commands.Identify()
         node = self._require_node(device)
-        for endpoint_id in node.endpoints:
-            if node.has_cluster(3, endpoint_id):
-                await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
+        with _server_call("the identification"):
+            for endpoint_id in node.endpoints:
+                if node.has_cluster(3, endpoint_id):
+                    await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
         node = self._require_node(device)
@@ -549,22 +551,23 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             if not cluster:
                 raise MatterUnexpectedError(f"Cluster {cluster_id} not found on endpoint {endpoint_id}")
 
-            if parameter.integration_data.type is MatterParameterTypeEnum.command:
-                await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
-            elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
-                attribute_id = parameter.integration_data.attribute_id
-                if attribute_id is not None and AttributeKey(cluster_id, attribute_id) in STATE_TOGGLE_ATTRIBUTES:
-                    cluster_command = self._state_toggle_command(
-                        node, endpoint_id, cluster, attribute_id, command.value
-                    )
-                    await self._require_matter_client().send_device_command(
-                        node.node_id,
-                        endpoint_id,
-                        cluster_command,
-                        timed_request_timeout_ms=1000 if cluster_command.must_use_timed_invoke else None,
-                    )
-                else:
-                    await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
+            with _server_call("the command"):
+                if parameter.integration_data.type is MatterParameterTypeEnum.command:
+                    await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
+                elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+                    attribute_id = parameter.integration_data.attribute_id
+                    if attribute_id is not None and AttributeKey(cluster_id, attribute_id) in STATE_TOGGLE_ATTRIBUTES:
+                        cluster_command = self._state_toggle_command(
+                            node, endpoint_id, cluster, attribute_id, command.value
+                        )
+                        await self._require_matter_client().send_device_command(
+                            node.node_id,
+                            endpoint_id,
+                            cluster_command,
+                            timed_request_timeout_ms=1000 if cluster_command.must_use_timed_invoke else None,
+                        )
+                    else:
+                        await self._write_cluster_attribute(node, endpoint_id, cluster_id, parameter, command)
         except UnknownError as e:
             error = str(e)
 

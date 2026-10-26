@@ -139,6 +139,7 @@ class FakeMatterClient:
         raise NodeNotExists(f"Node {node_id} does not exist or is not yet interviewed")  # as the real client
 
     async def remove_node(self, node_id: int):
+        await self._answer()
         if not (self.server.commissioned and node_id == self._node.node_id):
             raise NodeNotExists(f"Node {node_id} does not exist")  # as matterjs-server answers
         self.removed_nodes.append(node_id)
@@ -175,10 +176,12 @@ class FakeMatterClient:
 
     # --- commands / attributes ---
     async def send_device_command(self, node_id: int, endpoint_id: int, command: Any, **kwargs: Any):
+        await self._answer()
         self.sent_commands.append((node_id, endpoint_id, command))
         return None
 
     async def write_attribute(self, node_id: int, attribute_path: str, value: Any) -> Any:
+        await self._answer()
         self.written_attributes.append((node_id, attribute_path, value))
         # Reflect the write into the node so reads and subscribers see it, like a real device.
         self._node.update_attribute(attribute_path, value)

@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import inspect
 import logging
 from typing import override
@@ -111,6 +110,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         self._node_availability: dict[UUID, bool] = {}
         self._matter_client_session = ClientSession()
         listener = await self._connect()
+        self._background_tasks.append(listener)  # stop() ends it also after a start that fails below
         self._background_tasks.append(asyncio.create_task(self._matter_discovery_loop()))
 
         # BLE discovery for commissionable devices not yet on any IP network (the mDNS-based
@@ -197,9 +197,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         if not on_owning_loop:
             return
 
-        for task in background_tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        # one may have ended with an error long ago (a listener _stay_connected got over): it must not cut stop() short
+        await asyncio.gather(*background_tasks, return_exceptions=True)
 
         client = getattr(self, "_matter_client", None)  # none before a first connection
         if not self._matter_client_session or not client:

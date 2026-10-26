@@ -19,6 +19,7 @@ from majordom_integration_sdk import Endpoint, IntegrationError, Peripherals, Pl
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
+from matter_server.common.errors import UnknownError
 
 from majordom_matter import MatterController
 from majordom_matter.exceptions import MatterConnectionError
@@ -604,6 +605,39 @@ async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypat
     with pytest.raises(MatterConnectionError):
         await asyncio.wait_for(controller.start(), 2)
     await controller.stop()  # as the runtime does after a failed start
+
+
+async def test_stopping_matter_after_a_start_that_failed_late_leaves_nothing_running(monkeypatch):
+    async def refuse(self: FakeMatterClient, dataset: str):
+        raise UnknownError("refused")
+
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    monkeypatch.setattr(FakeMatterClient, "set_thread_operational_dataset", refuse)
+    controller = _matter(build_test_platform(thread_dataset="0e08abcd"))
+    before = asyncio.all_tasks()
+
+    with pytest.raises(UnknownError):
+        await controller.start()
+    await controller.stop()
+    assert [task for task in asyncio.all_tasks() - before if not task.done()] == []
+
+
+async def test_stopping_matter_after_its_first_listener_failed(monkeypatch):
+    class FailingListener(FakeMatterClient):
+        async def start_listening(self, init_ready: asyncio.Event | None = None):
+            await super().start_listening(init_ready)
+            raise RuntimeError("listening failed")  # once its matter-server went away
+
+    server = FakeMatterServer()
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FailingListener, server=server))
+    monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
+    controller = _matter(build_test_platform())
+    await controller.start()
+    first = controller._matter_client
+    server.lose()
+    server.restore()
+    await _wait(lambda: controller._matter_client is not first)
+    await asyncio.wait_for(controller.stop(), 2)
 
 
 async def test_stopping_matter_reports_no_error(monkeypatch):

@@ -206,6 +206,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         await client.disconnect()
         await self._matter_client_session.close()
 
+    @override
     async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
         """The router coming up once Matter runs is taken as at the start, in place, and with an adapter of its own
         matterjs-server doesn't use the router at all; anything else restarts Matter."""
@@ -218,6 +219,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         self._lend_router(self.peripherals.instance("ble"))
         return True
 
+    @override
     async def platform_facts_did_change(self, before: Platform) -> bool:
         """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
         if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):

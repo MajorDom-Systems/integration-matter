@@ -52,6 +52,7 @@ async def controller(monkeypatch):
     """A started MatterController whose matter-server client is the in-process fake."""
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=FakeMatterServer()))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
+    monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.0)  # at the first failed reconnect
     controller = _matter(build_test_platform())
     await controller.start()
     yield controller, controller.output
@@ -655,6 +656,41 @@ async def test_a_matter_server_back_at_the_first_reconnect_reports_no_error(cont
     assert output.error_log == []
 
 
+async def test_a_lost_matter_server_is_reported_only_once_the_outage_lasted(controller, monkeypatch):
+    ctrl, output = controller
+    monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.3)  # 15 s on a hub
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost_at = asyncio.get_running_loop().time()
+    lost.lose_server()
+    await asyncio.sleep(0.1)  # a few failed attempts: an outage, yet maybe a container recreated
+    assert output.error_log == []
+    await _wait(lambda: "server-unreachable" in output.errors)
+    assert asyncio.get_running_loop().time() - lost_at >= 0.3
+    lost.server.restore()
+    await _wait(lambda: "server-unreachable" not in output.errors)
+
+
+async def test_a_matter_server_dropping_every_connection_before_it_speaks_is_unreachable(controller, monkeypatch):
+    ctrl, output = controller
+    device_id = await _commission(ctrl)
+    output.connected_devices.clear()
+    start_listening = FakeMatterClient.start_listening
+
+    async def dropped(self: FakeMatterClient, init_ready: asyncio.Event | None = None):
+        return None  # accepted, then closed before its node dump
+
+    monkeypatch.setattr(FakeMatterClient, "start_listening", dropped)
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost.lose_server()
+    lost.server.restore()
+    await _wait(lambda: "server-unreachable" in output.errors)
+    assert output.lost_devices == [device_id] and output.connected_devices == []
+
+    monkeypatch.setattr(FakeMatterClient, "start_listening", start_listening)
+    await _wait(lambda: "server-unreachable" not in output.errors)
+    assert output.connected_devices == [device_id]
+
+
 async def test_a_start_reports_the_devices_on_the_fabric_connected(controller):
     ctrl, output = controller
     device_id = await _commission(ctrl)
@@ -668,6 +704,7 @@ async def test_stopping_matter_while_it_reconnects(monkeypatch):
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
+    monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.0)
     controller = _matter(build_test_platform())
     await controller.start()
     server.lose()

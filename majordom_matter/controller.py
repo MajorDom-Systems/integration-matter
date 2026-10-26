@@ -77,6 +77,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
+    _UNREACHABLE_AFTER = 15.0  # of outage before the user hears of it: a container recreated on purpose is back by then
     # what an outage raises: matterjs-server away, refusing the connection, or dropping it before it spoke
     _CONNECTION_ERRORS = (TransportError, NotConnected, InvalidState, MatterConnectionError, ClientError, OSError)
 
@@ -292,21 +293,22 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                     await listener
                 except Exception as e:
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
+                lost_at = asyncio.get_running_loop().time()
                 for device_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
                     if available:
                         await self.output.controller_did_lose_device(self, device_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
                 delay = self._RECONNECT_DELAY
-                is_reported = False  # only once the first reconnect failed: not a blip (its container recreated)
+                is_reported = False
                 while True:
                     await asyncio.sleep(delay)
                     try:
                         listener = await self._connect()
                         break
-                    except self._CONNECTION_ERRORS as e:
+                    except self._CONNECTION_ERRORS as e:  # also a connection dropped before matterjs-server spoke
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
-                        if not is_reported:
+                        if not is_reported and asyncio.get_running_loop().time() - lost_at >= self._UNREACHABLE_AFTER:
                             error = IntegrationError(
                                 "server-unreachable", "Lost the connection to the Matter server, reconnecting."
                             )

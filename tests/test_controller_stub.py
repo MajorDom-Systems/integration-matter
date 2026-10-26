@@ -866,3 +866,62 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     lost.server.restore()
     await _wait(lambda: set(output.connected_devices) == {first, discovery.id} and ctrl._matter_client is not lost)
     assert output.error_log == []
+
+
+async def _pairing_in_flight(ctrl: MatterController) -> asyncio.Task:
+    """A pairing whose commissioning waits for matterjs-server (a Thread one takes a minute)."""
+    await _wait(lambda: bool(ctrl.discoveries))
+    discovery = next(iter(ctrl.discoveries.values()))
+    cast(FakeMatterClient, ctrl._matter_client).server.is_answering = False
+    credentials = ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    pairing = asyncio.create_task(_pair(ctrl, discovery, credentials))
+    await asyncio.sleep(0.05)
+    return pairing
+
+
+async def test_a_pairing_matterjs_server_went_away_from_says_why(controller):
+    ctrl, _ = controller
+    pairing = await _pairing_in_flight(ctrl)
+    cast(FakeMatterClient, ctrl._matter_client).lose_server()  # the client cancels the calls waiting for an answer
+    with pytest.raises(MatterConnectionError, match="ended during the pairing"):  # the Hub drops its row, the app says why
+        await pairing
+
+
+async def test_a_pairing_cancelled_itself_stays_cancelled(controller):
+    ctrl, _ = controller
+    pairing = await _pairing_in_flight(ctrl)
+    pairing.cancel()  # the Hub's request ended
+    with pytest.raises(asyncio.CancelledError):
+        await pairing
+
+
+async def test_a_matter_server_gone_during_the_hand_over_on_reconnect_is_reconnected(monkeypatch):
+    server = FakeMatterServer()
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))
+    monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
+    controller = _matter(build_test_platform(thread_dataset="0e08abcd"))
+    await controller.start()
+    first = controller._matter_client
+    server.is_answering = False
+    server.lose()
+    server.restore()
+    await _wait(lambda: controller._matter_client is not first)  # its hand-over waits for an answer
+    second = controller._matter_client
+    server.is_answering = True
+    server.lose()  # the client cancels the hand-over
+    server.restore()
+    await _wait(lambda: controller._matter_client is not second)
+    assert cast(FakeMatterClient, controller._matter_client).networks == {"thread": "0e08abcd"}
+    await controller.stop()
+
+
+async def test_mdns_discovery_goes_on_after_matter_server_went_away_mid_call(controller):
+    ctrl, _ = controller
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.is_answering = False
+    discovering = asyncio.create_task(ctrl._matter_discovery_loop(interval=0.01))
+    await asyncio.sleep(0.05)
+    server.lose()  # the client cancels the listing waiting for an answer
+    await asyncio.sleep(0.05)
+    assert not discovering.done()
+    discovering.cancel()

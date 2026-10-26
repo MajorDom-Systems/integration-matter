@@ -147,6 +147,7 @@ class FakeMatterClient:
 
     # --- discovery ---
     async def discover_commissionable_nodes(self) -> list[CommissionableNodeData]:
+        await self._answer()
         if self.server.commissioned:
             return []
         info = self._node.device_info
@@ -163,10 +164,12 @@ class FakeMatterClient:
 
     # --- commissioning ---
     async def commission_with_code(self, code: str, network_only: bool = False) -> MatterNodeData:
+        await self._answer()
         self.server.commissioned = True
         return self._node.node_data
 
     async def commission_on_network(self, setup_pin_code: int, *args: Any, **kwargs: Any) -> MatterNodeData:
+        await self._answer()
         self.server.commissioned = True
         return self._node.node_data
 

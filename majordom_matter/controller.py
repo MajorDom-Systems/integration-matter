@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import inspect
 import logging
+from collections.abc import Generator
 from typing import override
 from uuid import UUID
 
@@ -47,6 +49,18 @@ from .model import (
     MatterParameterState,
     MatterParameterTypeEnum,
 )
+
+
+@contextlib.contextmanager
+def _answered(call: str) -> Generator[None]:
+    """python-matter-server cancels every call still waiting for its answer once matterjs-server goes away (or Matter
+    stops): such a cancel, one nobody asked of the task, is a lost connection."""
+    try:
+        yield
+    except asyncio.CancelledError:
+        if (task := asyncio.current_task()) and task.cancelling():
+            raise
+        raise MatterConnectionError(f"The connection to matterjs-server ended during {call}") from None
 
 
 class MatterController(AbstractController[MatterDevice, MatterParameter]):
@@ -244,10 +258,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         ones are still commissioned)."""
         try:
             client = self._require_matter_client()
-            if wifi := self.platform.wifi:
-                await client.set_wifi_credentials(wifi.ssid, wifi.password)
-            if dataset := self.platform.thread_dataset:
-                await client.set_thread_operational_dataset(dataset)
+            with _answered("the networks' hand-over"):
+                if wifi := self.platform.wifi:
+                    await client.set_wifi_credentials(wifi.ssid, wifi.password)
+                if dataset := self.platform.thread_dataset:
+                    await client.set_thread_operational_dataset(dataset)
         except self._CONNECTION_ERRORS as e:  # away: _stay_connected hands them over once it is back
             logging.info(f"[{self.name}] the networks wait for matterjs-server: {e!r}")
         except Exception as e:
@@ -365,7 +380,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         # offered under its device id and taken as it is; any other discovery is commissioned with its code
         on_fabric = {self._mapper.device_uuid(n.node_id, n.device_info.productName): n for n in client.get_nodes()}
         if (node := on_fabric.get(discovery.id)) is None:
-            node = client.get_node((await self._commission_discovery(discovery, credentials)).node_id)
+            with _answered("the pairing"):
+                commissioned = await self._commission_discovery(discovery, credentials)
+            node = client.get_node(commissioned.node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
         async with self.platform.device_repository(self) as device_repository:
@@ -577,7 +594,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         while True:
             try:
                 client = self._require_matter_client()
-                nodes: list[CommissionableNodeData] = await client.discover_commissionable_nodes()
+                with _answered("the discovery"):
+                    nodes: list[CommissionableNodeData] = await client.discover_commissionable_nodes()
                 for node in nodes:
                     await self._async_matter_did_discover(node)
             except Exception as e:

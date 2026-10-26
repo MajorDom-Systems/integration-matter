@@ -466,6 +466,34 @@ async def test_start_hands_the_hub_networks_to_matter_server(monkeypatch):
     await controller.stop()
 
 
+async def _refuse(self: FakeMatterClient, *args: Any):
+    raise UnknownError("Invalid Thread dataset")  # matterjs-server answers with an error
+
+
+async def test_a_network_matterjs_server_refuses_at_start_leaves_matter_running(monkeypatch):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    monkeypatch.setattr(FakeMatterClient, "set_thread_operational_dataset", _refuse)
+    controller = _matter(build_test_platform(thread_dataset="0e08abcd"))
+    await controller.start()  # it still serves every device it has, and Wi-Fi and Ethernet ones
+    await _wait(lambda: bool(controller.discoveries))
+    await controller.stop()
+
+
+async def test_a_network_matterjs_server_refuses_on_reconnect_leaves_matter_connected(controller, monkeypatch):
+    ctrl, output = controller
+    device_id = await _commission(ctrl)
+    monkeypatch.setattr(FakeMatterClient, "set_wifi_credentials", _refuse)
+    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, wifi=WifiCredentials("home", "secret"))
+    assert await ctrl.platform_facts_did_change(before)  # in place
+    output.connected_devices.clear()
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    lost.lose_server()
+    lost.server.restore()  # its container recreated
+    await _wait(lambda: output.connected_devices == [device_id])
+    assert ctrl._matter_client is not lost
+    assert output.error_log == []
+
+
 @pytest.mark.parametrize(
     ("facts", "networks"),
     [
@@ -657,15 +685,15 @@ async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypat
 
 
 async def test_stopping_matter_after_a_start_that_failed_late_leaves_nothing_running(monkeypatch):
-    async def refuse(self: FakeMatterClient, dataset: str):
-        raise UnknownError("refused")
+    def unreadable(self: FakeMatterClient) -> list:
+        raise RuntimeError("unreadable node dump")
 
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
-    monkeypatch.setattr(FakeMatterClient, "set_thread_operational_dataset", refuse)
-    controller = _matter(build_test_platform(thread_dataset="0e08abcd"))
+    monkeypatch.setattr(FakeMatterClient, "get_nodes", unreadable)
+    controller = _matter(build_test_platform())
     before = asyncio.all_tasks()
 
-    with pytest.raises(UnknownError):
+    with pytest.raises(RuntimeError):
         await controller.start()
     await controller.stop()
     assert [task for task in asyncio.all_tasks() - before if not task.done()] == []

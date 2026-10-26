@@ -4,7 +4,7 @@ import logging
 from typing import override
 from uuid import UUID
 
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
 from majordom_integration_sdk import AbstractController, IntegrationError, Need, NoSettings, PeripheralChange, Platform
@@ -14,6 +14,7 @@ from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ParameterState, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
+from matter_server.client.exceptions import InvalidState, NotConnected, TransportError
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
@@ -76,6 +77,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
+    # what an outage raises: matterjs-server away, refusing the connection, or dropping it before it spoke
+    _CONNECTION_ERRORS = (TransportError, NotConnected, InvalidState, MatterConnectionError, ClientError, OSError)
 
     def __init__(self, platform: Platform, *, settings: NoSettings | None = None):
         super().__init__(platform, settings=settings)
@@ -231,20 +234,22 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
         if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
             # in a task: the runtime waits for this hook, while matterjs-server may be away or not answer
-            self._background_tasks.append(asyncio.create_task(self._hand_over_networks_in_place()))
+            self._background_tasks.append(asyncio.create_task(self._hand_over_networks()))
         return True
 
-    async def _hand_over_networks_in_place(self):
-        try:
-            await self._hand_over_networks()
-        except Exception as e:  # e.g. matterjs-server is away: _stay_connected hands them over once it is back
-            logging.warning(f"[{self.name}] matterjs-server didn't take the new networks: {e!r}")
-
     async def _hand_over_networks(self):
-        if wifi := self.platform.wifi:
-            await self._require_matter_client().set_wifi_credentials(wifi.ssid, wifi.password)
-        if dataset := self.platform.thread_dataset:
-            await self._require_matter_client().set_thread_operational_dataset(dataset)
+        """One matterjs-server refuses is only logged: Matter still serves every device it has (and Wi-Fi and Ethernet
+        ones are still commissioned)."""
+        try:
+            client = self._require_matter_client()
+            if wifi := self.platform.wifi:
+                await client.set_wifi_credentials(wifi.ssid, wifi.password)
+            if dataset := self.platform.thread_dataset:
+                await client.set_thread_operational_dataset(dataset)
+        except self._CONNECTION_ERRORS as e:  # away: _stay_connected hands them over once it is back
+            logging.info(f"[{self.name}] the networks wait for matterjs-server: {e!r}")
+        except Exception as e:
+            logging.warning(f"[{self.name}] matterjs-server refused the networks: {e!r}")
 
     def _lend_router(self, router: BLERouter):
         # matterjs-server commissions over Bluetooth through the hub's radios, not its own

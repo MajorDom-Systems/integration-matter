@@ -9,8 +9,9 @@ def matterjs_server() -> Service:
     return Service(
         "matterjs-server",
         # Thread is optional: without a border router Matter still works over Wi-Fi and Ethernet. Bluetooth too: an
-        # adapter of its own only when one is reserved for it. The router is an in-process object a container can't
-        # bind: it reaches matterjs-server through the controller (ble_delegate, over /ble) instead.
+        # adapter of its own only when no Bluetooth router holds them (disabled, failed or absent). The router is an
+        # in-process object a container can't bind: it reaches matterjs-server through the controller (ble_delegate,
+        # over /ble) instead.
         needs=[Need("ip"), Need("thread", ["otbr-rest"], is_required=False), Need("ble", ["bluez"], is_required=False)],
         # the base URL: /ws, /ble; "adapter" tells the controller whether an adapter is bound here (empty: none)
         provides=[
@@ -28,7 +29,7 @@ def matterjs_server() -> Service:
             "environment": {
                 "STORAGE_PATH": "/data",
                 "PORT": "{ports.api}",
-                # Bluetooth comes from the hub (see ble_delegate) unless an adapter was reserved for it. Then noble
+                # Bluetooth comes from the hub (see ble_delegate) unless an adapter is bound to it. Then noble
                 # drives it through the host's BlueZ over the system bus: its default HCI socket backend needs root
                 "BLE_PROXY": "{peripherals.ble.url:!true}",
                 "BLUETOOTH_ADAPTER": "{peripherals.ble.params[index]}",

@@ -1,6 +1,6 @@
 """Matter integration for MajorDom.
 
-Bridges Matter devices into the MajorDom language via python-matter-server.
+Bridges Matter devices into the MajorDom language via matterjs-server, through the python-matter-server client.
 `peripherals` is what the Hub (or the SDK's standalone dev runner) runs: matterjs-server and the
 `MatterController` that drives it.
 """

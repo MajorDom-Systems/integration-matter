@@ -1,10 +1,10 @@
-"""In-process test doubles for the Matter integration — no matter-server, no MVD binaries.
+"""In-process test doubles for the Matter integration — no matterjs-server, no MVD binaries.
 
 `FakeMatterClient` stands in for `matter_server.client.MatterClient`, backed by a single canned
 node captured from a real MVD on-off-light (`fixtures/on_off_light_node.json`). It rebuilds a
 **real** `MatterNode` exactly as the live client does — `MatterNode(dataclass_from_dict(
 MatterNodeData, ...))` — so the controller and mapper run against a faithful node; only the
-transport (the websocket to matter-server) is faked.
+transport (the websocket to matterjs-server) is faked.
 
 Use it to exercise the controller's wiring — discovery, pairing/mapping, commands, events — in
 plain CI without docker. The heavy, real-device coverage stays in the dockerized MVD suite.
@@ -50,7 +50,7 @@ class _Subscription:
 
 
 class FakeMatterServer:
-    """matter-server's side of the fake: the fabric (the canned node) and whether the server is up."""
+    """matterjs-server's side of the fake: the fabric (the canned node) and whether the server is up."""
 
     def __init__(self, node: MatterNode | None = None):
         self.node = node if node is not None else load_on_off_light_node()
@@ -101,13 +101,13 @@ class FakeMatterClient:
     # --- lifecycle ---
     async def connect(self) -> None:
         if not self.server.up:
-            raise CannotConnect(ConnectionRefusedError("matter-server is down"))
+            raise CannotConnect(ConnectionRefusedError("matterjs-server is down"))
         self._server_gone = self.server.gone
 
     async def start_listening(self, init_ready: asyncio.Event | None = None) -> None:
         if init_ready is not None:
             init_ready.set()
-        # The real client runs its websocket loop until matter-server goes away (`lose_server()`);
+        # The real client runs its websocket loop until matterjs-server goes away (`lose_server()`);
         # block until then or until the controller's stop() cancels this task.
         await self._server_gone.wait()
 
@@ -124,7 +124,7 @@ class FakeMatterClient:
 
     async def _answer(self):
         if not self.server.up or self._server_gone.is_set():
-            raise InvalidState("Not connected")  # as the real client does once its matter-server went away
+            raise InvalidState("Not connected")  # as the real client does once its matterjs-server went away
         if not self.server.is_answering:
             await self._server_gone.wait()
             raise asyncio.CancelledError  # the real client's disconnect cancels the calls waiting for an answer
@@ -140,7 +140,7 @@ class FakeMatterClient:
 
     async def remove_node(self, node_id: int) -> None:
         if not (self.server.commissioned and node_id == self._node.node_id):
-            raise NodeNotExists(f"Node {node_id} does not exist")  # as matter-server answers
+            raise NodeNotExists(f"Node {node_id} does not exist")  # as matterjs-server answers
         self.removed_nodes.append(node_id)
         if node_id == self._node.node_id:
             self.server.commissioned = False
@@ -195,7 +195,7 @@ class FakeMatterClient:
 
     # --- test helpers ---
     def lose_server(self) -> None:
-        """Simulate matter-server going away (its container restarting): listening ends, as the real client's does."""
+        """Simulate matterjs-server going away (its container restarting): listening ends, as the real client's does."""
         self.server.lose()
 
     def fire_attribute_update(self, attribute_path: str, value: Any) -> None:

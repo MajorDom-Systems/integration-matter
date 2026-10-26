@@ -52,10 +52,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
     """Bridges the Hub to Matter devices through a Matter controller server (matterjs-server).
 
     matterjs-server owns the Matter fabric and commissioning, over the hub's Bluetooth
-    (`MatterServerBLEDelegate`) and a Thread border router; this controller adapts it to the
-    Hub's AbstractController contract, talking to it over its WebSocket API. On-network devices
-    are discovered via matterjs-server; BLE-only commissionable devices are discovered via the
-    Bluetooth router. See readme.md.
+    (`MatterServerBLEDelegate`), or an adapter of its own when no Bluetooth router runs, and a Thread
+    border router; this controller adapts it to the Hub's AbstractController contract, talking to it
+    over its WebSocket API. On-network devices are discovered via matterjs-server; BLE-only
+    commissionable devices are discovered via the Bluetooth router, or, with an adapter of its own,
+    found by matterjs-server from the pairing code entered. See readme.md.
     """
 
     # matter: matterjs-server's base URL (its API at /ws, its BLE proxy at /ble);

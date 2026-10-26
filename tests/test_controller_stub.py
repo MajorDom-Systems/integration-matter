@@ -619,6 +619,15 @@ async def test_a_matter_server_back_at_the_first_reconnect_reports_no_error(cont
     assert output.error_log == []
 
 
+async def test_a_start_reports_the_devices_on_the_fabric_connected(controller):
+    ctrl, output = controller
+    device_id = await _commission(ctrl)
+    await ctrl.stop()  # the Hub marks its devices unavailable
+    output.connected_devices.clear()
+    await ctrl.start()
+    assert output.connected_devices == [device_id]
+
+
 async def test_stopping_matter_while_it_reconnects(monkeypatch):
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=server))

@@ -162,6 +162,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 )
                 self._majordom_descoveries[discovery_id] = discovery
                 await self.output.controller_did_receive_discovery(self, discovery)
+        for device_id, available in self._node_availability.items():  # the Hub, or a lost server, made them unavailable
+            if available:
+                await self.output.controller_did_connect_device(self, device_id)
 
     async def stop(self):
         self._majordom_descoveries.clear()
@@ -306,9 +309,6 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
                 if is_reported:
                     await self.output.controller_did_resolve_error(self, "server-unreachable")
-                for device_id, available in self._node_availability.items():
-                    if available:
-                        await self.output.controller_did_connect_device(self, device_id)
         finally:
             listener.cancel()
 

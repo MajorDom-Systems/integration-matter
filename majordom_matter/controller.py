@@ -62,7 +62,7 @@ def _answered(call: str) -> Generator[None]:
         raise MatterConnectionError(f"The connection to matterjs-server ended during {call}") from None
 
 
-class MatterController(AbstractController[MatterDevice, MatterParameter]):
+class MatterController(AbstractController[MatterDevice, MatterParameter, NoSettings]):
     """Bridges the Hub to Matter devices through a Matter controller server (matterjs-server).
 
     matterjs-server owns the Matter fabric and commissioning, over the hub's Bluetooth

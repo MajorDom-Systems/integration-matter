@@ -468,7 +468,46 @@ async def test_a_new_thread_network_reaches_matter_server_in_place(controller):
     ctrl, _ = controller
     before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset="0e08abcd")
     assert await ctrl.platform_facts_did_change(before)
+    await _wait(lambda: cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"})
+
+
+async def test_a_new_network_matter_server_doesnt_answer_holds_neither_the_hook_nor_matter(controller):
+    ctrl, output = controller
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.is_answering = False  # busy or hung, its connection open
+    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset="0e08abcd")
+    assert await asyncio.wait_for(ctrl.platform_facts_did_change(before), 1)
+
+    server.lose()  # with the call still waiting for its answer
+    await _wait(lambda: "server-unreachable" in output.errors)
+    server.is_answering = True
+    server.restore()
+    await _wait(lambda: "server-unreachable" not in output.errors)
     assert cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"}
+
+
+async def test_a_new_network_during_a_reconnect_reaches_the_new_connection(controller, monkeypatch):
+    ctrl, _ = controller
+    lost = cast(FakeMatterClient, ctrl._matter_client)
+    is_listening, is_dumped = asyncio.Event(), asyncio.Event()  # the node dump makes a new connection ready
+    start_listening = FakeMatterClient.start_listening
+
+    async def dumping_nodes(self: FakeMatterClient, init_ready: asyncio.Event | None = None):
+        is_listening.set()
+        await is_dumped.wait()
+        await start_listening(self, init_ready)
+
+    monkeypatch.setattr(FakeMatterClient, "start_listening", dumping_nodes)
+    lost.lose_server()
+    lost.server.restore()
+    await asyncio.wait_for(is_listening.wait(), 1)
+
+    before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset="0e08abcd")
+    assert await ctrl.platform_facts_did_change(before)
+    assert ctrl._matter_client is lost  # not the new connection before it is ready: its node dump comes first
+    is_dumped.set()
+    await _wait(lambda: cast(FakeMatterClient, ctrl._matter_client).networks == {"thread": "0e08abcd"})
+    assert lost.networks == {}
 
 
 async def test_a_new_thread_network_reaches_a_lost_matter_server_once_it_is_back(controller):
@@ -560,8 +599,11 @@ async def test_a_matter_server_gone_before_it_is_ready_fails_the_start(monkeypat
             return None
 
     monkeypatch.setattr("majordom_matter.controller.MatterClient", GoneAtOnce)
+    controller = _matter(build_test_platform())
+
     with pytest.raises(MatterConnectionError):
-        await asyncio.wait_for(_matter(build_test_platform()).start(), 2)
+        await asyncio.wait_for(controller.start(), 2)
+    await controller.stop()  # as the runtime does after a failed start
 
 
 async def test_stopping_matter_reports_no_error(monkeypatch):

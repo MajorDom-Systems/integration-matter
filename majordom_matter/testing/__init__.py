@@ -56,6 +56,7 @@ class FakeMatterServer:
         self.node = node if node is not None else load_on_off_light_node()
         self.commissioned = False
         self.up = True
+        self.is_answering = True  # False: a call waits for its answer until the server goes away
         self.gone = asyncio.Event()  # set when this run of the server goes away
 
     def lose(self) -> None:
@@ -114,16 +115,19 @@ class FakeMatterClient:
         return None
 
     async def set_wifi_credentials(self, ssid: str, credentials: str) -> None:
-        self._require_server()
+        await self._answer()
         self.networks["wifi"] = (ssid, credentials)
 
     async def set_thread_operational_dataset(self, dataset: str) -> None:
-        self._require_server()
+        await self._answer()
         self.networks["thread"] = dataset
 
-    def _require_server(self):
-        if not self.server.up:
-            raise InvalidState("Not connected")  # as the real client does once matter-server went away
+    async def _answer(self):
+        if not self.server.up or self._server_gone.is_set():
+            raise InvalidState("Not connected")  # as the real client does once its matter-server went away
+        if not self.server.is_answering:
+            await self._server_gone.wait()
+            raise asyncio.CancelledError  # the real client's disconnect cancels the calls waiting for an answer
 
     # --- nodes ---
     def get_nodes(self) -> list[MatterNode]:

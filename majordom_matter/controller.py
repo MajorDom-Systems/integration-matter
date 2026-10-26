@@ -15,7 +15,6 @@ from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ParameterState, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
-from matter_server.client.exceptions import InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
@@ -202,9 +201,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-        if not self._matter_client_session or not self._matter_client:
+        client = getattr(self, "_matter_client", None)  # none before a first connection
+        if not self._matter_client_session or not client:
             return
-        await self._matter_client.disconnect()
+        await client.disconnect()
         await self._matter_client_session.close()
 
     async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
@@ -218,9 +218,15 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
     async def platform_facts_did_change(self, before: Platform) -> bool:
         """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
         if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
-            with contextlib.suppress(InvalidState):  # matterjs-server is away: _stay_connected hands them over
-                await self._hand_over_networks()
+            # in a task: the runtime waits for this hook, while matterjs-server may be away or not answer
+            self._background_tasks.append(asyncio.create_task(self._hand_over_networks_in_place()))
         return True
+
+    async def _hand_over_networks_in_place(self):
+        try:
+            await self._hand_over_networks()
+        except Exception as e:  # e.g. matterjs-server is away: _stay_connected hands them over once it is back
+            logging.warning(f"[{self.name}] matterjs-server didn't take the new networks: {e!r}")
 
     async def _hand_over_networks(self):
         if wifi := self.platform.wifi:
@@ -239,12 +245,13 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         return self.peripherals.endpoint("matter").url.rstrip("/")
 
     async def _connect(self) -> asyncio.Task:
-        """Connects a fresh client to matterjs-server; the returned listener runs until matterjs-server goes away."""
-        self._matter_client = MatterClient(f"{self._server_url}/ws", self._matter_client_session)
-        await self._matter_client.connect()
+        """Connects a fresh client to matterjs-server, current once it is ready; the returned listener runs until
+        matterjs-server goes away."""
+        client = MatterClient(f"{self._server_url}/ws", self._matter_client_session)
+        await client.connect()
 
         init_ready = asyncio.Event()
-        listener = asyncio.create_task(self._matter_client.start_listening(init_ready=init_ready))
+        listener = asyncio.create_task(client.start_listening(init_ready=init_ready))
         ready = asyncio.create_task(init_ready.wait())
         try:
             await asyncio.wait({ready, listener}, return_when=asyncio.FIRST_COMPLETED)
@@ -254,6 +261,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
                 listener.cancel()
         if not init_ready.is_set():
             raise MatterConnectionError("matterjs-server went away before it was ready")
+        # not before: start_listening would take the answer to a call made meanwhile (a hand-over) for its node dump
+        self._matter_client = client
         return listener
 
     async def _stay_connected(self, listener: asyncio.Task):

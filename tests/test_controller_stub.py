@@ -7,6 +7,7 @@ in the dockerized MVD suite, test_controller.py.
 """
 
 import asyncio
+import logging
 from dataclasses import replace
 from functools import partial
 from typing import Any, cast
@@ -1030,6 +1031,20 @@ async def test_mdns_discovery_goes_on_after_matter_server_went_away_mid_call(con
     await asyncio.sleep(0.05)
     assert not discovering.done()
     discovering.cancel()
+
+
+async def test_mdns_discovery_logs_each_outage_once_as_a_warning(controller, caplog):
+    ctrl, _ = controller
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.lose()
+    discovering = asyncio.create_task(ctrl._matter_discovery_loop(interval=0.01))
+    await asyncio.sleep(0.1)  # some listings fail
+    server.restore()
+    await asyncio.sleep(0.1)  # reconnected: listed again
+    server.lose()
+    await asyncio.sleep(0.1)
+    discovering.cancel()
+    assert [r.levelno for r in caplog.records if "discovery" in r.getMessage()] == [logging.WARNING] * 2
 
 
 @pytest.fixture

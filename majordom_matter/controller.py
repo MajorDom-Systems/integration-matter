@@ -633,13 +633,19 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         # duplicate matterjs-server's parser. BLE-only devices, which mDNS can't see, ARE discovered via
         # the Bluetooth router instead (see the BLE discovery section below) — so the "our
         # discovery + SDK for pairing" split is used exactly where it adds value.
+        is_away = False  # matterjs-server: an outage is logged once
         while True:
             try:
                 client = self._require_matter_client()
                 with _server_call("the discovery"):
                     nodes: list[CommissionableNodeData] = await client.discover_commissionable_nodes()
+                is_away = False
                 for node in nodes:
                     await self._async_matter_did_discover(node)
+            except self._CONNECTION_ERRORS as e:
+                if not is_away:
+                    logging.warning(f"[{self.name}] discovery waits for matterjs-server: {e!r}")
+                is_away = True
             except Exception as e:
                 logging.error(f"[{self.name}] discovery error: {e}")
             await asyncio.sleep(interval)

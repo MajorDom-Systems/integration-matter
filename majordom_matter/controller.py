@@ -51,9 +51,9 @@ from .model import (
 
 
 @contextlib.contextmanager
-def _answered(call: str) -> Generator[None]:
-    """python-matter-server cancels every call still waiting for its answer once matterjs-server goes away (or Matter
-    stops): such a cancel, one nobody asked of the task, is a lost connection."""
+def _server_call(call: str) -> Generator[None]:
+    """A call matterjs-server answers. python-matter-server cancels every one still waiting once matterjs-server goes
+    away (or Matter stops): such a cancel, one nobody asked of the task, is a lost connection."""
     try:
         yield
     except asyncio.CancelledError:
@@ -258,11 +258,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         return True
 
     async def _hand_over_networks(self):
-        """One matterjs-server refuses is only logged: Matter still serves every device it has (and Wi-Fi and Ethernet
-        ones are still commissioned)."""
+        """A network matterjs-server refuses is only logged: Matter still serves every device it has, and still
+        commissions Wi-Fi and Ethernet ones."""
         try:
             client = self._require_matter_client()
-            with _answered("the networks' hand-over"):
+            with _server_call("the networks' hand-over"):
                 if wifi := self.platform.wifi:
                     await client.set_wifi_credentials(wifi.ssid, wifi.password)
                 if dataset := self.platform.thread_dataset:
@@ -385,7 +385,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         on_fabric = {self._node_device_id(n): n for n in client.get_nodes()}
         if (node := on_fabric.get(discovery.id)) is not None:
             return await self._add_device(discovery, node)
-        with _answered("the pairing"):
+        with _server_call("the pairing"):
             commissioned = await self._commission_discovery(discovery, credentials)
         node = client.get_node(commissioned.node_id)
         try:
@@ -609,7 +609,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         while True:
             try:
                 client = self._require_matter_client()
-                with _answered("the discovery"):
+                with _server_call("the discovery"):
                     nodes: list[CommissionableNodeData] = await client.discover_commissionable_nodes()
                 for node in nodes:
                     await self._async_matter_did_discover(node)

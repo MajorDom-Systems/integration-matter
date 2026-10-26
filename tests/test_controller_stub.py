@@ -966,3 +966,13 @@ async def test_a_node_a_failed_pairing_commissioned_is_offered_as_it_is_at_once(
     assert offered.id == ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
     assert offered.expected_credentials_options == [CredentialsType.none]  # added without a code
     assert output.lost_discoveries == [commissionable.id]  # no longer commissionable
+
+
+async def test_hand_overs_in_place_leave_no_ended_tasks_behind(controller):
+    ctrl, _ = controller
+    running = len(ctrl._background_tasks)
+    for dataset in ("0e08aaaa", "0e08bbbb", "0e08cccc"):
+        before, ctrl.platform = ctrl.platform, replace(ctrl.platform, thread_dataset=dataset)
+        assert await ctrl.platform_facts_did_change(before)
+        await asyncio.sleep(0.02)
+    assert len(ctrl._background_tasks) <= running + 1

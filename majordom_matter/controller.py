@@ -253,6 +253,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
         if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
             # in a task: the runtime waits for this hook, while matterjs-server may be away or not answer
+            self._background_tasks = [task for task in self._background_tasks if not task.done()]
             self._background_tasks.append(asyncio.create_task(self._hand_over_networks()))
         return True
 

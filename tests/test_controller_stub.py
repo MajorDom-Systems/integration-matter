@@ -669,6 +669,55 @@ async def test_a_lost_matter_server_is_reported_only_once_the_outage_lasted(cont
     await _wait(lambda: "server-unreachable" not in output.errors)
 
 
+async def test_a_matter_server_dropping_every_connection_after_its_node_list_is_reported(controller, monkeypatch):
+    """Each connection holds for a moment only: the drops add up to one outage, until a connection holds."""
+    ctrl, output = controller
+    monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.3)
+
+    async def dropping(self: FakeMatterClient, init_ready: asyncio.Event | None = None):
+        if init_ready is not None:
+            init_ready.set()  # its node list
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(FakeMatterClient, "start_listening", dropping)
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.lose()
+    server.restore()
+    await _wait(lambda: "server-unreachable" in output.error_log)  # reported, and cleared at the next reconnect
+    lost_server = IntegrationError("server-unreachable", "Lost the connection to the Matter server, reconnecting.")
+    assert output.error_log[:2] == [lost_server, "server-unreachable"]
+
+
+async def test_a_matter_server_lost_again_soon_after_it_came_back_is_reported_at_once(controller, monkeypatch):
+    ctrl, output = controller
+    monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.3)
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.lose()
+    await _wait(lambda: "server-unreachable" in output.errors)
+    server.restore()
+    await _wait(lambda: "server-unreachable" not in output.errors)  # the devices work again
+
+    server.lose()  # the same outage: the connection didn't hold
+    await asyncio.sleep(0.05)
+    assert "server-unreachable" in output.errors
+
+
+async def test_a_matter_server_lost_long_after_it_came_back_is_a_new_outage(controller, monkeypatch):
+    ctrl, output = controller
+    monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.3)
+    monkeypatch.setattr(MatterController, "_STABLE_CONNECTION", 0.2)  # STABLE_RUN (5 min) on a hub
+    server = cast(FakeMatterClient, ctrl._matter_client).server
+    server.lose()
+    await _wait(lambda: "server-unreachable" in output.errors)
+    server.restore()
+    await _wait(lambda: "server-unreachable" not in output.errors)
+    await asyncio.sleep(0.3)  # held: the outage ended
+
+    server.lose()
+    await asyncio.sleep(0.05)
+    assert "server-unreachable" not in output.errors  # not yet: this outage only began
+
+
 async def test_a_matter_server_dropping_every_connection_before_it_speaks_is_unreachable(controller, monkeypatch):
     ctrl, output = controller
     device_id = await _commission(ctrl)

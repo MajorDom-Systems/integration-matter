@@ -9,7 +9,15 @@ from uuid import UUID
 from aiohttp import ClientError, ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
 from chip.clusters.Objects import ClosureControl, Identify, OperationalState
-from majordom_integration_sdk import AbstractController, IntegrationError, Need, NoSettings, PeripheralChange, Platform
+from majordom_integration_sdk import (
+    STABLE_RUN,
+    AbstractController,
+    IntegrationError,
+    Need,
+    NoSettings,
+    PeripheralChange,
+    Platform,
+)
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
@@ -91,6 +99,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     _RECONNECT_DELAY = 1.0  # doubles per failed attempt, up to _RECONNECT_DELAY_MAX
     _RECONNECT_DELAY_MAX = 30.0
     _UNREACHABLE_AFTER = 15.0  # of outage before the user hears of it: a container recreated on purpose is back by then
+    # an outage is over only once a reconnect held this long, so drops in a row add up: a matterjs-server that sends its
+    # node list and drops every time is reported
+    _STABLE_CONNECTION = STABLE_RUN
     # what an outage raises: matterjs-server away, refusing the connection, or dropping it before it spoke
     _CONNECTION_ERRORS = (TransportError, NotConnected, InvalidState, MatterConnectionError, ClientError, OSError)
 
@@ -306,13 +317,18 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     async def _stay_connected(self, listener: asyncio.Task):
         """Reconnects whenever matterjs-server goes away (e.g. its container is recreated) until stop() cancels it,
         so the integration heals by itself instead of being restarted by the hub."""
+        loop = asyncio.get_running_loop()
+        outage_since: float | None = None
         try:
             while True:
+                connected_at = loop.time()
                 try:
                     await listener
                 except Exception as e:
                     logging.warning(f"[{self.name}] matterjs-server listener failed: {e!r}")
-                lost_at = asyncio.get_running_loop().time()
+                failed_at = loop.time()
+                if outage_since is None or failed_at - connected_at >= self._STABLE_CONNECTION:
+                    outage_since = failed_at  # a new outage
                 for device_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
                     if available:
                         await self.output.controller_did_lose_device(self, device_id)
@@ -321,22 +337,24 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 delay = self._RECONNECT_DELAY
                 is_reported = False
                 while True:
+                    # on each failure, the drop too: one soon after a reconnect is the same outage
+                    if not is_reported and failed_at - outage_since > self._UNREACHABLE_AFTER:
+                        error = IntegrationError(
+                            "server-unreachable", "Lost the connection to the Matter server, reconnecting."
+                        )
+                        await self.output.controller_did_encounter_error(self, error)
+                        is_reported = True
                     await asyncio.sleep(delay)
                     try:
                         listener = await self._connect()
                         break
                     except self._CONNECTION_ERRORS as e:  # also a connection dropped before matterjs-server spoke
+                        failed_at = loop.time()
                         logging.info(f"[{self.name}] matterjs-server is not back yet: {e!r}")
-                        if not is_reported and asyncio.get_running_loop().time() - lost_at >= self._UNREACHABLE_AFTER:
-                            error = IntegrationError(
-                                "server-unreachable", "Lost the connection to the Matter server, reconnecting."
-                            )
-                            await self.output.controller_did_encounter_error(self, error)
-                            is_reported = True
                         delay = min(delay * 2, self._RECONNECT_DELAY_MAX)
                 await self._sync_with_server()
                 logging.info(f"[{self.name}] reconnected to matterjs-server")
-                if is_reported:
+                if is_reported:  # the devices work again; the outage goes on until the connection held
                     await self.output.controller_did_resolve_error(self, "server-unreachable")
         except Exception:  # a bug rather than an outage: the runtime restarts Matter, then gives up on it
             logging.exception(f"[{self.name}] stopped following matterjs-server")

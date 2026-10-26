@@ -357,9 +357,6 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
             raise MatterUnexpectedError("This credentials type is not supported")
         commission_node = await self._commission(str(credentials.value), network_only=network_only)
 
-        self._majordom_descoveries.pop(discovery.id)
-        if discovery.id == self._by_code_id:
-            await self._offer_commissioning_by_code()  # the next device is added the same way
         node = self._matter_client.get_node(commission_node.node_id)
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
 
@@ -425,6 +422,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
 
             await device_repository.save(device, discovery.id)
 
+        # only now that the Hub's row under its id moved to the device's: a pairing started from it saves one there
+        self._majordom_descoveries.pop(discovery.id)
+        if discovery.id == self._by_code_id:
+            await self._offer_commissioning_by_code()  # the next device is added the same way
         await self.output.controller_did_connect_device(self, device_id)
         self._subscription(device_id, node)
         return device_id

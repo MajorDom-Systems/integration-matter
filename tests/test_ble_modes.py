@@ -9,7 +9,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from majordom_integration_sdk import Endpoint, Peripherals
+from majordom_integration_sdk import AbstractController, Discovery, Endpoint, Peripherals
 from majordom_integration_sdk.runtime import MemoryDisabledStore, PeripheralState, Runtime
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 from majordom_integration_sdk.testing import (
@@ -49,6 +49,23 @@ def by_ble(controller: MatterController) -> list[str]:
     return [d.device_name for d in controller.discoveries.values() if d.transport == "BLE"]
 
 
+async def seed_the_hubs_row(controller: MatterController, discovery: Discovery):
+    """What the Hub saves under the discovery's id when pairing starts."""
+    async with controller.platform.device_repository(controller) as repo:
+        await repo.save(
+            MatterDeviceState(
+                id=discovery.id,
+                name="Bulb",
+                room_id=UUID(int=1),
+                transport="BLE",
+                integration="matter",
+                manufacturer=None,
+                parameters=[],
+                integration_data=MatterDeviceIntegrationData(node_id=0),
+            )  # fmt: skip
+        )
+
+
 async def test_through_the_router_it_lists_the_devices_waiting_over_bluetooth(fake_server):
     radio = FakeBLESource("hci0")
     router = FakeBLERouter([radio])
@@ -82,19 +99,7 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     assert by_ble(controller) == ["Matter device (enter its pairing code)"]  # the router isn't used
 
     (by_code,) = (d for d in controller.discoveries.values() if d.transport == "BLE")
-    async with controller.platform.device_repository(controller) as repo:  # what the Hub seeds when pairing starts
-        await repo.save(
-            MatterDeviceState(
-                id=by_code.id,
-                name="Bulb",
-                room_id=UUID(int=1),
-                transport="BLE",
-                integration="matter",
-                manufacturer=None,
-                parameters=[],
-                integration_data=MatterDeviceIntegrationData(node_id=0),
-            )  # fmt: skip
-        )
+    await seed_the_hubs_row(controller, by_code)
     await controller.pair_device(by_code, ProvidedCredentials(type=CredentialsType.code, value="3497-011-2332"))
 
     assert output.connected_devices
@@ -102,6 +107,24 @@ async def test_with_an_adapter_of_its_own_it_takes_a_pairing_code_for_matterjs_s
     assert [d.id for d in output.received_discoveries].count(by_code.id) == 2
     await controller.stop()
     await router.stop()
+
+
+async def test_the_pairing_code_is_offered_again_once_the_device_it_paired_is_saved(fake_server):
+    controller = await started(None, replace(SERVER, params={"adapter": "hci0"}))
+    is_row_there: list[bool] = []  # at each offer: the Hub's row under its id, which pairing moves to the device's
+
+    class Output(RecordingControllerOutput):
+        async def controller_did_receive_discovery(self, controller: AbstractController, discovery: Discovery):
+            if discovery.transport == "BLE":
+                async with controller.platform.device_repository(controller) as repo:
+                    is_row_there.append(await repo.get(discovery.id) is not None)
+
+    controller.output = Output()
+    (by_code,) = (d for d in controller.discoveries.values() if d.transport == "BLE")
+    await seed_the_hubs_row(controller, by_code)
+    await controller.pair_device(by_code, ProvidedCredentials(type=CredentialsType.code, value="3497-011-2332"))
+    assert is_row_there == [False]  # a pairing started from it at once would save its row under a taken id
+    await controller.stop()
 
 
 async def hub(

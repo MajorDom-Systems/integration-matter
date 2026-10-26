@@ -170,11 +170,12 @@ async def hub(
     """A hub with hci0 running Matter, once its controller runs."""
     hci0 = Endpoint("ble", "bluez", "hci0", params={"index": "0"}, instance=FakeBLESource("hci0"))
     host = FakePeripheral("host", provides=[Endpoint("ip", is_shared=True), hci0])
-    exported = majordom_matter.peripherals(build_test_platform())
+    exported = majordom_matter.peripherals(build_test_platform(tmp_path / "peripherals"))
     (controller,) = (p for p in exported if isinstance(p, MatterController))
     runtime = Runtime(
         tmp_path,
         [host, FakeCompose(), router, *exported],
+        platform=controller.platform,
         output=RecordingRuntimeOutput(),
         disabled=MemoryDisabledStore([router.key] if is_router_disabled else []),
     )

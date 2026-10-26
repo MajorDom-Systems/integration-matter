@@ -1,4 +1,4 @@
-"""Smoke tests — no matter-server or binaries required (run everywhere)."""
+"""Smoke tests — no matterjs-server or binaries required (run everywhere)."""
 
 from majordom_integration_sdk import Service
 from majordom_integration_sdk.controller import AbstractController

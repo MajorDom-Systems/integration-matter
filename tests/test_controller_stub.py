@@ -1,4 +1,4 @@
-"""Controller wiring tests against the in-process FakeMatterClient — no matter-server, no MVD.
+"""Controller wiring tests against the in-process FakeMatterClient — no matterjs-server, no MVD.
 
 These run in the default (non-docker) CI. They exercise discovery, pairing + parameter mapping,
 commands, and attribute events through the REAL controller and mapper against a faithful canned
@@ -50,7 +50,7 @@ def _matter(platform: Platform) -> MatterController:
 
 @pytest_asyncio.fixture
 async def controller(monkeypatch):
-    """A started MatterController whose matter-server client is the in-process fake."""
+    """A started MatterController whose matterjs-server client is the in-process fake."""
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FakeMatterClient, server=FakeMatterServer()))
     monkeypatch.setattr(MatterController, "_RECONNECT_DELAY", 0.01)
     monkeypatch.setattr(MatterController, "_UNREACHABLE_AFTER", 0.0)  # at the first failed reconnect
@@ -270,7 +270,7 @@ def _spy_commissioning(ctrl) -> tuple[AsyncMock, AsyncMock]:
 
 
 async def test_qr_on_network_discovery_commissions_network_only(controller):
-    # matter-server runs without a Bluetooth adapter in production; a non-network_only QR
+    # matterjs-server may run without Bluetooth; a non-network_only QR
     # commission fails there with "Bluetooth commissioning is not available".
     ctrl, _output = controller
     discovery = await _discovery_over(ctrl, "IP")
@@ -444,7 +444,7 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
     def subscribed(parameter_id: UUID):
         return next((e.value for e in reversed(output.events) if e.parameter_id == parameter_id), None)
 
-    # matter-server pushes raw JSON: a struct keyed by field id, not by name.
+    # matterjs-server pushes raw JSON: a struct keyed by field id, not by name.
     capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
     ctrl._matter_client.fire_attribute_update("0/40/19", {"0": 4, "1": 3})
     await _wait(lambda: subscribed(capability_minima) is not None)
@@ -573,7 +573,7 @@ async def test_a_new_thread_network_reaches_a_lost_matter_server_once_it_is_back
 async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monkeypatch):
     monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
     controller = _matter(build_test_platform())
-    # left by a commissioning that failed, or a reset matter-server
+    # left by a commissioning that failed, or a reset matterjs-server
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(
             MatterDeviceState(
@@ -746,7 +746,7 @@ async def test_stopping_matter_after_its_first_listener_failed(monkeypatch):
     class FailingListener(FakeMatterClient):
         async def start_listening(self, init_ready: asyncio.Event | None = None):
             await super().start_listening(init_ready)
-            raise RuntimeError("listening failed")  # once its matter-server went away
+            raise RuntimeError("listening failed")  # once its matterjs-server went away
 
     server = FakeMatterServer()
     monkeypatch.setattr("majordom_matter.controller.MatterClient", partial(FailingListener, server=server))

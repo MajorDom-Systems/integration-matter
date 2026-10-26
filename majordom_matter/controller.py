@@ -12,7 +12,7 @@ from majordom_integration_sdk import AbstractController, IntegrationError, Need,
 from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
-from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ProvidedCredentials
+from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ParameterState, ProvidedCredentials
 from majordom_integration_sdk.schemas.event import DeviceParameterChange
 from majordom_integration_sdk.schemas.parameter import ParameterDataType, ParameterRole, ParameterVisibility
 from matter_server.client.exceptions import InvalidState
@@ -44,6 +44,7 @@ from .model import (
     MatterDeviceIntegrationData,
     MatterDeviceState,
     MatterParameter,
+    MatterParameterIntegrationData,
     MatterParameterState,
     MatterParameterTypeEnum,
 )
@@ -831,8 +832,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         await self._matter_client.write_attribute(node.node_id, attribute_path, value)
 
     def _get_main_parameter(
-        self, device_id: UUID, node: MatterNode, parameters: list[MatterParameterState]
-    ) -> tuple[MatterParameterState | None, DefaultParams]:
+        self, device_id: UUID, node: MatterNode, parameters: list[ParameterState[MatterParameterIntegrationData]]
+    ) -> tuple[ParameterState[MatterParameterIntegrationData] | None, DefaultParams]:
         # Only `user` parameters can be main (see can_be_main_parameter, which also needs the
         # default_value set from these defaults) — skip hidden ones so they don't shadow a later match.
         candidates = {p.id: p for p in parameters if p.visibility is ParameterVisibility.user}

@@ -34,9 +34,7 @@ class MatterParameterIntegrationData(BaseModel):
     default_arguments: dict[str, Any] | None = None
 
 
-class MatterDevice(Device):
-    integration_data: MatterDeviceIntegrationData
-
+class MatterDevice(Device[MatterDeviceIntegrationData]):
     @property
     def node_id(self) -> int:
         assert self.integration_data
@@ -45,13 +43,13 @@ class MatterDevice(Device):
         return self.integration_data.node_id
 
 
-class MatterParameter(Parameter):
-    integration_data: MatterParameterIntegrationData
+class MatterParameter(Parameter[MatterParameterIntegrationData]):
+    pass
 
 
-class MatterParameterState(ParameterState):
-    integration_data: MatterParameterIntegrationData
+class MatterParameterState(ParameterState[MatterParameterIntegrationData]):
+    pass
 
 
-class MatterDeviceState(MatterDevice, DeviceState):
-    parameters: list[MatterParameterState]
+class MatterDeviceState(MatterDevice, DeviceState[MatterDeviceIntegrationData, MatterParameterIntegrationData]):
+    pass

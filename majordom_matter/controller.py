@@ -166,7 +166,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         for node in client.get_nodes():
             if node.node_id in device_nodes:
                 continue
-            discovery_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
+            if (discovery_id := self._node_device_id(node)) is None:
+                logging.info(f"[{self.name}] node {node.node_id} isn't interviewed yet: offered at the next start")
+                continue
             discovery = Discovery(
                 id=discovery_id,
                 integration=NonEmptyStr(self.key),
@@ -377,7 +379,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         client = self._require_matter_client()
         # a node on the fabric without a device (a pairing that ended before the save, a device deleted since) is
         # offered under its device id and taken as it is; any other discovery is commissioned with its code
-        on_fabric = {self._mapper.device_uuid(n.node_id, n.device_info.productName): n for n in client.get_nodes()}
+        on_fabric = {self._node_device_id(n): n for n in client.get_nodes()}
         if (node := on_fabric.get(discovery.id)) is None:
             with _answered("the pairing"):
                 commissioned = await self._commission_discovery(discovery, credentials)
@@ -785,6 +787,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         if not self._matter_client:
             raise MatterConnectionError("Matter client is not started")
         return self._matter_client
+
+    def _node_device_id(self, node: MatterNode) -> UUID | None:
+        """None for a node matterjs-server hasn't interviewed yet: without its attributes it has no device info."""
+        return self._mapper.device_uuid(node.node_id, node.device_info.productName) if 0 in node.endpoints else None
 
     def _require_node(self, device: MatterDevice) -> MatterNode:
         node = self._require_matter_client().get_node(device.node_id)

@@ -27,6 +27,7 @@ from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
 from matter_server.client.exceptions import CannotConnect
+from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 
 from majordom_matter import MatterController
@@ -923,3 +924,27 @@ async def test_mdns_discovery_goes_on_after_matter_server_went_away_mid_call(con
     await asyncio.sleep(0.05)
     assert not discovering.done()
     discovering.cancel()
+
+
+@pytest.fixture
+def uninterviewed(monkeypatch) -> MatterNode:
+    """A node on the fabric matterjs-server hasn't interviewed yet: no attributes, so no device info."""
+    node = MatterNode(replace(load_on_off_light_node().node_data, node_id=9, attributes={}))
+    on_fabric = FakeMatterClient.get_nodes
+    monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), node])
+    return node
+
+
+async def test_a_node_matterjs_server_hasnt_interviewed_is_left_out_at_start(monkeypatch, uninterviewed):
+    monkeypatch.setattr("majordom_matter.controller.MatterClient", FakeMatterClient)
+    controller = _matter(build_test_platform())
+    await controller.start()
+    await _wait(lambda: bool(controller.discoveries))
+    assert [d.device_name for d in controller.discoveries.values()] == ["TEST_PRODUCT"]  # the commissionable one
+    await controller.stop()
+
+
+async def test_a_node_matterjs_server_hasnt_interviewed_doesnt_stop_a_pairing(controller, uninterviewed):
+    ctrl, output = controller
+    await _commission(ctrl)
+    assert output.connected_devices

@@ -155,32 +155,31 @@ class MatterController(AbstractController[MatterDevice, MatterParameter]):
         device_nodes: list[int] = []
         nodes = {node.node_id: node for node in client.get_nodes()}  # get_node raises for a missing one
         async with self.platform.device_repository(self) as device_repository:
-            for device in await device_repository.get_all(as_=MatterDevice):
-                if node := nodes.get(device.integration_data.node_id):
-                    self._subscription(device.id, node)
-                    device_nodes.append(device.integration_data.node_id)
-                else:
-                    device.available = False
-                    device.last_error = f"Device {device.name} is no longer connected to the Matter network"
-                    await device_repository.save(device, device.id)
+            devices = await device_repository.get_all(as_=MatterDevice)
+        for device in devices:
+            if node := nodes.get(device.integration_data.node_id):
+                self._subscription(device.id, node)
+                device_nodes.append(device.integration_data.node_id)
+            else:  # gone from the fabric: a commissioning that failed, a reset matterjs-server
+                await self.output.controller_did_lose_device(self, device.id)
 
-            for node in client.get_nodes():
-                if node.node_id in device_nodes:
-                    continue
-                discovery_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
-                discovery = Discovery(
-                    id=discovery_id,
-                    integration=NonEmptyStr(self.key),
-                    expected_credentials_options=[CredentialsType.none],
-                    expiration=None,
-                    transport=NonEmptyStr("IP"),
-                    device_name=NonEmptyStr(node.device_info.productName or "Unknown"),
-                    device_manufacturer=node.device_info.vendorName or str(node.device_info.vendorID),
-                    device_category=None,
-                    device_icon=None,
-                )
-                self._majordom_descoveries[discovery_id] = discovery
-                await self.output.controller_did_receive_discovery(self, discovery)
+        for node in client.get_nodes():
+            if node.node_id in device_nodes:
+                continue
+            discovery_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
+            discovery = Discovery(
+                id=discovery_id,
+                integration=NonEmptyStr(self.key),
+                expected_credentials_options=[CredentialsType.none],
+                expiration=None,
+                transport=NonEmptyStr("IP"),
+                device_name=NonEmptyStr(node.device_info.productName or "Unknown"),
+                device_manufacturer=node.device_info.vendorName or str(node.device_info.vendorID),
+                device_category=None,
+                device_icon=None,
+            )
+            self._majordom_descoveries[discovery_id] = discovery
+            await self.output.controller_did_receive_discovery(self, discovery)
         # the Hub, or a lost server, made them unavailable; a copy: a pairing may land meanwhile
         for device_id, available in list(self._node_availability.items()):
             if available:

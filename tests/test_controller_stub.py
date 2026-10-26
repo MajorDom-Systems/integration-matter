@@ -587,9 +587,7 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
             )
         )
     await controller.start()
-    async with controller.platform.device_repository(controller) as repo:
-        device = await repo.get(UUID(int=7), as_=MatterDevice)
-        assert device is not None and device.available is False
+    assert cast(RecordingControllerOutput, controller.output).lost_devices == [UUID(int=7)]  # the app hears it too
     await controller.stop()
 
 

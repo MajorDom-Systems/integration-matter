@@ -3,6 +3,7 @@ import contextlib
 import inspect
 import logging
 from collections.abc import Coroutine, Generator
+from dataclasses import replace
 from typing import Any, override
 from uuid import UUID
 
@@ -18,7 +19,7 @@ from majordom_integration_sdk import (
     PeripheralChange,
     Platform,
 )
-from majordom_integration_sdk.capabilities import BLEDiscoveryInfo, BLERouter
+from majordom_integration_sdk.capabilities import BLE_ROUTER, BLEDiscoveryInfo, BLERouter
 from majordom_integration_sdk.schemas.base import NonEmptyStr
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsType, Discovery, ParameterState, ProvidedCredentials
@@ -83,7 +84,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     # matter: matterjs-server's base URL (its API at /ws, its BLE proxy at /ble);
     # ble: the router, which MatterServerBLEDelegate lends matterjs-server for commissioning
-    needs = [Need("matter", ["matter-server"]), Need("ble", ["router"], is_required=False)]
+    needs = [Need("matter", ["matter-server"]), replace(BLE_ROUTER, is_required=False)]
 
     _matter_client: MatterClient | None = None  # once connected, until stop()
     _matter_client_session: ClientSession
@@ -150,7 +151,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             # matterjs-server holds an adapter of its own and scans inside commission_with_code; it can't list
             # commissionable BLE devices, so one generic discovery takes the pairing code
             await self._offer_commissioning_by_code()
-        elif router := self.peripherals.instance("ble"):
+        elif router := self.peripherals.instance(BLE_ROUTER):
             self._lend_router(router)
 
         await self._sync_with_server()
@@ -245,27 +246,6 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         finally:
             if session := getattr(self, "_matter_client_session", None):  # none before a first start
                 await session.close()
-
-    @override
-    async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
-        """The router coming up once Matter runs is taken as at the start, in place, and with an adapter of its own
-        matterjs-server doesn't use the router at all; anything else restarts Matter."""
-        if change.family != "ble":
-            return False
-        if self.peripherals.endpoint("matter").params.get("adapter"):
-            return True
-        if change.before is not None:
-            return False
-        self._lend_router(self.peripherals.instance("ble"))
-        return True
-
-    @override
-    async def platform_facts_did_change(self, before: Platform) -> bool:
-        """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
-        if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
-            # in a task: the runtime waits for this hook, while matterjs-server may be away or not answer
-            self._spawn(self._hand_over_networks())
-        return True
 
     def _spawn(self, coroutine: Coroutine[Any, Any, None]):
         """Runs it in a task stop() ends; kept, as the event loop holds its tasks only weakly."""
@@ -367,6 +347,31 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             )
         finally:
             listener.cancel()
+
+    # -------------------------------------------------------------------------
+    # Peripheral hooks
+    # -------------------------------------------------------------------------
+
+    @override
+    async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
+        """The router coming up once Matter runs is taken as at the start, in place, and with an adapter of its own
+        matterjs-server doesn't use the router at all; anything else restarts Matter."""
+        if change.family != "ble":
+            return False
+        if self.peripherals.endpoint("matter").params.get("adapter"):
+            return True
+        if change.before is not None:
+            return False
+        self._lend_router(self.peripherals.instance(BLE_ROUTER))
+        return True
+
+    @override
+    async def platform_facts_did_change(self, before: Platform) -> bool:
+        """A new Thread network or Wi-Fi reaches matterjs-server in place, for the devices commissioned next."""
+        if (self.platform.wifi, self.platform.thread_dataset) != (before.wifi, before.thread_dataset):
+            # in a task: the runtime waits for this hook, while matterjs-server may be away or not answer
+            self._spawn(self._hand_over_networks())
+        return True
 
     # -------------------------------------------------------------------------
     # Hub -> device operations

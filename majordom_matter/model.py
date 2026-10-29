@@ -15,7 +15,7 @@ class MatterParameterTypeEnum(StrEnum):
 class MatterDeviceIntegrationData(Base):
     # Defaults to 0 (the "not yet commissioned" sentinel): the Hub seeds a provisional device
     # with empty integration_data before pair_device runs, and the read-back must validate as a
-    # MatterDeviceState. pair_device sets the real node_id once matter-server commissions the node.
+    # MatterDeviceState. pair_device sets the real node_id once matterjs-server commissions the node.
     node_id: int = 0
     black_list: list[UUID] = Field(default_factory=list)
 
@@ -34,24 +34,19 @@ class MatterParameterIntegrationData(BaseModel):
     default_arguments: dict[str, Any] | None = None
 
 
-class MatterDevice(Device):
-    integration_data: MatterDeviceIntegrationData
-
+class MatterDevice(Device[MatterDeviceIntegrationData]):
     @property
     def node_id(self) -> int:
-        assert self.integration_data
-        if isinstance(self.integration_data, dict):
-            return self.integration_data["node_id"]
         return self.integration_data.node_id
 
 
-class MatterParameter(Parameter):
-    integration_data: MatterParameterIntegrationData
+class MatterParameter(Parameter[MatterParameterIntegrationData]):
+    pass
 
 
-class MatterParameterState(ParameterState):
-    integration_data: MatterParameterIntegrationData
+class MatterParameterState(ParameterState[MatterParameterIntegrationData]):
+    pass
 
 
-class MatterDeviceState(MatterDevice, DeviceState):
-    parameters: list[MatterParameterState]
+class MatterDeviceState(MatterDevice, DeviceState[MatterDeviceIntegrationData, MatterParameterIntegrationData]):
+    pass

@@ -18,9 +18,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: POSIX :: Linux",
 ]
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.13,<3.14"
 dependencies = [
-    "majordom-integration-sdk (>=0.2.0,<1.0)",
+    "majordom-integration-sdk (>=0.3.0,<1.0)",
     "python-matter-server (>=8.1.2,<9.0.0)",
     "home-assistant-chip-core (>=2025.7.0)",
     "home-assistant-chip-clusters (>=2025.7.0)",
@@ -42,6 +42,7 @@ dev = [
     "pytest-benchmark", "pytest-profiling", "pytest-resource-usage", "coverage",
     "pytest-rerunfailures",
     "pympler", "psutil", "faker",
+    "majordom-integration-sdk[ble] (>=0.3.0,<1.0)",  # the SDK's Bluetooth fakes hear with bleak's types
 ]
 
 [build-system]

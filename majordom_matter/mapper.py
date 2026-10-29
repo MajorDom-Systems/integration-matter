@@ -491,13 +491,8 @@ class MatterMapper:
             role = spec.role if spec.role is not None else (ParameterRole.control if writable else ParameterRole.sensor)
             if source.startswith("fallback"):
                 logging.warning(
-                    "Uncurated attribute cluster %#x attr %#x (%s) -> %s (%s); add to OUR_ATTRIBUTE_UX "
-                    "or refresh the matter-HA harvest",
-                    cluster_id,
-                    attribute_id,
-                    name,
-                    visibility.value,
-                    source,
+                    f"Uncurated attribute cluster {cluster_id:#x} attr {attribute_id:#x} ({name}) -> "
+                    f"{visibility.value} ({source}); add to OUR_ATTRIBUTE_UX or refresh the matter-HA harvest"
                 )
 
             valid_values = None

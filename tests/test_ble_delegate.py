@@ -1,12 +1,12 @@
-"""matter-server commissions over Bluetooth through the hub's radios (BLE proxy protocol v1)."""
+"""matterjs-server commissions over Bluetooth through the hub's radios (BLE proxy protocol v1)."""
 
 import asyncio
 import struct
 
 import pytest
 from aiohttp import ClientSession, web
-from majordom_integration_sdk.discovery import BLEService, GattCharacteristic, GattService
-from majordom_integration_sdk.testing import FakeBLESource
+from majordom_integration_sdk.capabilities import GattCharacteristic, GattService
+from majordom_integration_sdk.testing import FakeBLERouter, FakeBLESource
 
 from majordom_matter.ble_delegate import MatterServerBLEDelegate
 
@@ -35,10 +35,10 @@ class FakeConnection:
     async def read(self, handle):
         return b""
 
-    async def write(self, handle, data, response=True):
+    async def write(self, handle, data, is_response_needed=True):
         if self.error:
             raise self.error
-        self.writes.append((handle, data, response))
+        self.writes.append((handle, data, is_response_needed))
 
     async def start_notify(self, handle, callback):
         self.notify = callback
@@ -51,7 +51,7 @@ class FakeConnection:
 
 @pytest.fixture
 async def matter_server():
-    """A stand-in for matter-server's /ble endpoint; yields its URL and the backends that connect."""
+    """A stand-in for matterjs-server's /ble endpoint; yields its URL and the backends that connect."""
     backends: asyncio.Queue[web.WebSocketResponse] = asyncio.Queue()
     done = asyncio.Event()
 
@@ -82,7 +82,7 @@ def radios() -> list[FakeBLESource]:
 async def backend(matter_server, radios):
     url, backends = matter_server
     radio = radios[0]
-    ble = BLEService(sources=radios)
+    ble = FakeBLERouter(sources=radios)
     await ble.start()
     async with ClientSession() as session:
         task = asyncio.create_task(MatterServerBLEDelegate(url, ble, session).run())
@@ -157,7 +157,7 @@ async def test_a_failed_write_is_answered_and_the_backend_keeps_serving(backend)
     reply = await command(ws, 2, "write_characteristic", connection_handle=1, characteristic_uuid=C1, value="aHM=")
     assert reply["error"] == "write_failed"
 
-    # a BTP segment is no request: its failure ends the connection, which matter-server is told about
+    # a BTP segment is no request: its failure ends the connection, which matterjs-server is told about
     await ws.send_bytes(FRAME.pack(0x01, 1) + b"segment")
     assert await ws.receive_json(timeout=5) == {"event": "disconnected", "data": {"connection_handle": 1}}
     assert connection.disconnected

@@ -24,7 +24,7 @@ services:
     privileged: true
     depends_on: [matter-server]
     environment:
-      - MATTER_SERVER_URL=ws://matter-server:5580/ws
+      - MATTER_SERVER_URL=ws://matter-server:5580  # the base URL: the suite adds /ws
       - MATTER_DISCOVERY_TIMEOUT_S=12
       - MATTER_INTEGRATION_TESTS=1
     sysctls:

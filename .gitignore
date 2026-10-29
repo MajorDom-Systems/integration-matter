@@ -61,3 +61,6 @@ tests/mvd-artifact/
 # matter-server storage + PAA certs (fetched by CI, §3.5)
 matter_data/
 paa/            # fetch_paa_certs.py / mvd-artifact.yml default cert output dir
+
+# The dev runner's settings and keys
+.majordom-dev/

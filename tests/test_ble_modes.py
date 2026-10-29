@@ -279,8 +279,9 @@ async def test_a_router_that_fails_hands_matterjs_server_an_adapter(tmp_path, fa
 
     router = Broken()
     runtime, controller = await hub(tmp_path, router, adapter="hci0")
-    assert runtime.status(router).state == PeripheralState.FAILED
-    assert by_ble(controller) == [BY_CODE]
+    async with asyncio.timeout(2):  # the router's retries, then Matter's restart with the adapter, settle in turn
+        while not (runtime.status(router).state == PeripheralState.FAILED and by_ble(controller) == [BY_CODE]):
+            await asyncio.sleep(0.01)
     await runtime.stop()
 
 

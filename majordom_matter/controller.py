@@ -356,13 +356,13 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     async def needed_peripheral_did_change(self, change: PeripheralChange) -> bool:
         """The router coming up once Matter runs is taken as at the start, in place, and with an adapter of its own
         matterjs-server doesn't use the router at all; anything else restarts Matter."""
-        if change.family != "ble":
+        if change.family != BLE_ROUTER.family:
             return False
         if self.peripherals.endpoint("matter").params.get("adapter"):
             return True
-        if change.before is not None:
+        if change.before is not None or (router := self.peripherals.instance(BLE_ROUTER)) is None:
             return False
-        self._lend_router(self.peripherals.instance(BLE_ROUTER))
+        self._lend_router(router)
         return True
 
     @override

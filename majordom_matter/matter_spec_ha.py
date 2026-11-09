@@ -169,5 +169,6 @@ MATTER_HA_ATTRIBUTE_UX: dict[tuple[int, int], tuple[str, str, str]] = {
     (0x042E, 0x000A): ("user", "sensor", "plain"),
     (0x042F, 0x0000): ("user", "sensor", "plain"),
     (0x0430, 0x0001): ("user", "sensor", "percentage"),
+    (0x0551, 0x0016): ("setting", "control", "plain"),
     (0x0556, 0x0001): ("setting", "control", "plain"),
 }

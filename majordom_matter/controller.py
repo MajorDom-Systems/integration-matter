@@ -119,7 +119,6 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         # Instance state (not class-level): the mapper is wired with the framework's UUID
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
-        self._dac_device_ids: dict[int, UUID] = {}
         self._majordom_descoveries = dict()
 
     # -------------------------------------------------------------------------
@@ -206,10 +205,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         await self.output.controller_did_receive_discovery(self, discovery)
 
     def _fabric_discovery(self, node: MatterNode) -> Discovery | None:
-        if (discovery_id := self._node_device_id(node)) is None:
+        if 0 not in node.endpoints:
             return None
         return Discovery(
-            id=discovery_id,
+            id=self._fabric_discovery_id(node.node_id),
             integration=NonEmptyStr(self.key),
             expected_credentials_options=[CredentialsType.none],
             expiration=None,
@@ -429,8 +428,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     ) -> MatterDeviceState:
         client = self._require_matter_client()
         # a node on the fabric without a device (a pairing that ended before the save, a device deleted since) is
-        # offered under its device id and taken as it is; any other discovery is commissioned with its code
-        on_fabric = {self._node_device_id(n): n for n in client.get_nodes()}
+        # offered under an id of its node id and taken as it is; any other discovery is commissioned with its code
+        on_fabric = {self._fabric_discovery_id(n.node_id): n for n in client.get_nodes()}
         if (node := on_fabric.get(discovery.id)) is not None:
             return await self._fill_draft(discovery, draft, node)
         with _server_call("the pairing"):
@@ -560,7 +559,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
-        self._majordom_descoveries.pop(device.physical_id, None)  # the Hub saved it: no longer offered
+        self._majordom_descoveries.pop(
+            self._fabric_discovery_id(device.node_id), None
+        )  # the Hub saved it: no longer offered
         node = self._require_node(device)
         self._subscription(device.physical_id, node)
         if not node.available:
@@ -874,11 +875,15 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             return None
         info = node.device_info
         by_info = self._mapper.device_uuid(info.vendorID, info.productID, info.serialNumber, info.uniqueID)
-        # the DAC needs a call to the node: a node known only by it is matched here once a pairing has fetched it
-        return by_info or self._dac_device_ids.get(node.node_id)
+        return by_info
+
+    def _fabric_discovery_id(self, node_id: int) -> UUID:
+        """A node on the fabric is offered under this, whatever its physical id: that is read (a DAC needs a call to the
+        node) only when it is paired. Stable as long as the node is on the fabric."""
+        return self._mapper.discovery_uuid(f"matter-fabric-node-{node_id}")
 
     async def _resolve_node_device_id(self, node: MatterNode) -> UUID | None:
-        """_node_device_id, else the node's Device Attestation Certificate (cached): no serial, no unique id."""
+        """_node_device_id, else the node's Device Attestation Certificate: no serial, no unique id."""
         if (device_id := self._node_device_id(node)) is not None or 0 not in node.endpoints:
             return device_id
         for attempt in range(_DAC_ATTEMPTS):
@@ -893,7 +898,6 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 )
                 await asyncio.sleep(_DAC_RETRY_DELAY)
             else:
-                self._dac_device_ids[node.node_id] = device_id
                 return device_id
         return None
 

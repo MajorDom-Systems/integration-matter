@@ -603,11 +603,12 @@ async def test_a_node_on_the_fabric_without_a_device_is_added_as_it_is(monkeypat
     (discovery,) = controller.discoveries.values()
     assert discovery.expected_credentials_options == [CredentialsType.none]
 
-    await _pair(controller, discovery, credentials)
+    paired = await _pair(controller, discovery, credentials)
     async with controller.platform.device_repository(controller) as repo:
-        device = await repo.get(physical_id=discovery.id, as_=MatterDevice)
+        device = await repo.get(physical_id=paired.physical_id, as_=MatterDevice)
     assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
-    assert cast(RecordingControllerOutput, controller.output).connected_devices == [discovery.id]
+    assert paired.physical_id != discovery.id
+    assert cast(RecordingControllerOutput, controller.output).connected_devices == [paired.physical_id]
     assert controller.discoveries == {}
     await controller.stop()
 
@@ -946,7 +947,7 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     second.node_data.node_id = FAKE_NODE_ID + 1  # on the fabric without a device: added as it is
     on_fabric = FakeMatterClient.get_nodes
     monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), second])
-    second_id = ctrl._node_device_id(second)
+    second_id = ctrl._fabric_discovery_id(second.node_id)
     discovery = output.received_discoveries[0].model_copy(
         update={"id": second_id, "expected_credentials_options": [CredentialsType.none]}
     )
@@ -964,7 +965,7 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     lost.lose_server()
     await asyncio.wait_for(is_reporting.wait(), 1)
     draft = await ctrl.pair_device(discovery, draft_for(discovery), None)  # quick: nothing to commission
-    assert draft.physical_id == second_id
+    assert draft.physical_id == ctrl._node_device_id(second)
     lost.server.restore()
     await _wait(lambda: set(output.connected_devices) == {first} and ctrl._matter_client is not lost)
     assert output.error_log == []
@@ -1141,8 +1142,9 @@ async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node
     )
     # the Hub refused the id or failed to save: nothing saved, nothing undone
 
-    assert ctrl.discoveries.keys() == {first.physical_id}
-    again = await _pair(ctrl, ctrl.discoveries[first.physical_id], None)
+    fabric_id = ctrl._fabric_discovery_id(FAKE_NODE_ID)
+    assert ctrl.discoveries.keys() == {fabric_id} and fabric_id != first.physical_id
+    again = await _pair(ctrl, ctrl.discoveries[fabric_id], None)
 
     assert again.physical_id == first.physical_id and again.integration_data.node_id == FAKE_NODE_ID
     assert ctrl.discoveries == {}  # saved and fetched: offered no more
@@ -1173,7 +1175,9 @@ async def test_an_id_another_record_holds_is_refused_before_anything_is_mapped(c
     assert draft.id == draft_id and draft.parameters == []
     # on the fabric now, no longer commissionable: offered as it is, for the user to merge into the record
     (offered,) = ctrl.discoveries.values()
-    assert offered.id == taken and offered.expected_credentials_options == [CredentialsType.none]
+    assert offered.id == ctrl._fabric_discovery_id(FAKE_NODE_ID) and offered.expected_credentials_options == [
+        CredentialsType.none
+    ]
     assert output.lost_discoveries == [commissionable.id]
 
 
@@ -1303,13 +1307,24 @@ async def test_the_same_attestation_certificate_gives_the_same_id(controller, mo
     assert await ctrl._resolve_node_device_id(other) != first
 
 
-async def test_a_read_attestation_certificate_identifies_the_node_for_the_sync_paths(controller, monkeypatch):
-    ctrl, _ = controller
-    _serve_dac(monkeypatch, ctrl, [b"dac"])
+async def test_a_dac_only_node_on_the_fabric_is_offered_after_a_restart_and_paired_by_its_node_id(
+    controller, monkeypatch
+):
+    ctrl, output = controller
     node = _dac_node()
-    assert ctrl._node_device_id(node) is None
-    resolved = await ctrl._resolve_node_device_id(node)
-    assert resolved is not None and ctrl._node_device_id(node) == resolved
+    node.node_data.node_id = FAKE_NODE_ID + 1
+    on_fabric = FakeMatterClient.get_nodes
+    monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), node])
+    calls = _serve_dac(monkeypatch, ctrl, [b"dac"])
+    ctrl.discoveries.clear()
+
+    await ctrl._sync_with_server()  # what a controller restart runs
+
+    offered = ctrl.discoveries[ctrl._fabric_discovery_id(node.node_id)]
+    assert calls == []  # offering needs no certificate
+    draft = await ctrl.pair_device(offered, draft_for(offered), None)
+    assert draft.physical_id == ctrl.device_uuid(hashlib.sha256(b"dac").digest())
+    assert draft.integration_data.node_id == node.node_id
 
 
 async def test_a_first_attestation_read_failing_is_retried_once(controller, monkeypatch):

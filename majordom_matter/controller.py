@@ -72,6 +72,9 @@ def _server_call(call: str) -> Generator[None]:
         raise MatterConnectionError(f"The connection to matterjs-server ended during {call}") from None
 
 
+UNSAVED_PAIRING_TIMEOUT = (
+    120.0  # seconds a paired node waits for the Hub to save and fetch it before it is offered again
+)
 _DAC_ATTEMPTS = 2
 _DAC_REQUEST = OperationalCredentials.Commands.CertificateChainRequest(
     certificateType=OperationalCredentials.Enums.CertificateChainTypeEnum(1)  # the DAC
@@ -151,6 +154,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     async def start(self):
         self._background_tasks: list[asyncio.Task] = []
         self._node_availability: dict[UUID, bool] = {}
+        self._unsaved_pairings: dict[int, asyncio.Task[None]] = {}  # by node id: waiting for the Hub's fetch
         self._subscribed: dict[UUID, MatterClient] = {}  # the client each device's callbacks are on
         self._matter_client_session = ClientSession()
         listener = await self._connect()
@@ -204,6 +208,15 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         self._majordom_descoveries[discovery.id] = discovery
         await self.output.controller_did_receive_discovery(self, discovery)
 
+    def _cancel_unsaved_pairing(self, node_id: int):
+        if (waiting := self._unsaved_pairings.pop(node_id, None)) is not None:
+            waiting.cancel()
+
+    async def _offer_unless_saved(self, node: MatterNode):
+        await asyncio.sleep(UNSAVED_PAIRING_TIMEOUT)
+        self._unsaved_pairings.pop(node.node_id, None)
+        await self._offer_fabric_node(node)
+
     def _fabric_discovery(self, node: MatterNode) -> Discovery | None:
         if 0 not in node.endpoints:
             return None
@@ -221,6 +234,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def stop(self):
         self._majordom_descoveries.clear()
+        getattr(self, "_unsaved_pairings", {}).clear()  # the tasks are among the background ones
         client, self._matter_client = self._matter_client, None
 
         if cancel := getattr(self, "_ble_cancel", None):
@@ -265,10 +279,12 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             if session := getattr(self, "_matter_client_session", None):  # none before a first start
                 await session.close()
 
-    def _spawn(self, coroutine: Coroutine[Any, Any, None]):
+    def _spawn(self, coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         """Runs it in a task stop() ends; kept, as the event loop holds its tasks only weakly."""
         self._background_tasks = [task for task in self._background_tasks if not task.done()]
-        self._background_tasks.append(asyncio.create_task(coroutine))
+        task = asyncio.create_task(coroutine)
+        self._background_tasks.append(task)
+        return task
 
     async def _hand_over_networks(self):
         """A network matterjs-server refuses is only logged: Matter still serves every device it has, and still
@@ -506,10 +522,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
         draft.integration_data.node_id = node.node_id
         self._majordom_descoveries.pop(discovery.id, None)
-        # Offered as a fabric node until the Hub saves the device (it fetches it then): one it never saves is
-        # retried from there, as it is. Not announced: the app is just pairing it
-        if self._matter_client is not None and (fabric := self._fabric_discovery(node)) is not None:
-            self._majordom_descoveries[fabric.id] = fabric
+        # Not offered while the Hub saves the device (it fetches it then): one it never saves is offered as it is
+        if self._matter_client is not None:
+            self._cancel_unsaved_pairing(node.node_id)
+            self._unsaved_pairings[node.node_id] = self._spawn(self._offer_unless_saved(node))
         # a pairing landing after stop() keeps its device rather than failing: the node is commissioned onto the fabric
         if discovery.id == self._by_code_id and self._matter_client is not None:
             await self._offer_commissioning_by_code()  # the next device is added the same way
@@ -559,9 +575,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
-        self._majordom_descoveries.pop(
-            self._fabric_discovery_id(device.node_id), None
-        )  # the Hub saved it: no longer offered
+        self._cancel_unsaved_pairing(device.node_id)
+        self._majordom_descoveries.pop(self._fabric_discovery_id(device.node_id), None)
         node = self._require_node(device)
         self._subscription(device.physical_id, node)
         if not node.available:

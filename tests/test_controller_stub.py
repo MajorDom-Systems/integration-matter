@@ -1133,8 +1133,19 @@ async def test_a_failure_after_the_commissioning_leaves_the_node_on_the_fabric_t
     assert ctrl.discoveries == {} and client.removed_nodes == []
 
 
-async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node(controller):
+async def test_a_paired_node_is_not_offered_while_the_hub_saves_it(controller):
+    ctrl, _ = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+    assert ctrl.discoveries == {}
+
+
+async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node(controller, monkeypatch):
     ctrl, output = controller
+    monkeypatch.setattr("majordom_matter.controller.UNSAVED_PAIRING_TIMEOUT", 0.05)
     await _wait(lambda: bool(ctrl.discoveries))
     (discovery,) = ctrl.discoveries.values()
     first = await ctrl.pair_device(
@@ -1143,12 +1154,21 @@ async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node
     # the Hub refused the id or failed to save: nothing saved, nothing undone
 
     fabric_id = ctrl._fabric_discovery_id(FAKE_NODE_ID)
-    assert ctrl.discoveries.keys() == {fabric_id} and fabric_id != first.physical_id
+    await _wait(lambda: fabric_id in ctrl.discoveries)
+    assert fabric_id != first.physical_id
     again = await _pair(ctrl, ctrl.discoveries[fabric_id], None)
 
     assert again.physical_id == first.physical_id and again.integration_data.node_id == FAKE_NODE_ID
     assert ctrl.discoveries == {}  # saved and fetched: offered no more
     assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
+
+
+async def test_a_fetch_of_the_paired_node_means_the_hub_saved_it(controller, monkeypatch):
+    ctrl, _ = controller
+    monkeypatch.setattr("majordom_matter.controller.UNSAVED_PAIRING_TIMEOUT", 0.05)
+    await _commission(ctrl)  # pairs and fetches
+    await asyncio.sleep(0.15)
+    assert ctrl.discoveries == {}
 
 
 async def test_an_id_another_record_holds_is_refused_before_anything_is_mapped(controller):

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 import inspect
 import logging
@@ -9,7 +10,7 @@ from uuid import UUID
 
 from aiohttp import ClientError, ClientSession
 from chip.clusters.ClusterObjects import ClusterAttributeDescriptor, ClusterCommand
-from chip.clusters.Objects import ClosureControl, Identify, OperationalState
+from chip.clusters.Objects import ClosureControl, Identify, OperationalCredentials, OperationalState
 from majordom_integration_sdk import (
     STABLE_RUN,
     AbstractController,
@@ -71,6 +72,13 @@ def _server_call(call: str) -> Generator[None]:
         raise MatterConnectionError(f"The connection to matterjs-server ended during {call}") from None
 
 
+_DAC_ATTEMPTS = 2
+_DAC_REQUEST = OperationalCredentials.Commands.CertificateChainRequest(
+    certificateType=OperationalCredentials.Enums.CertificateChainTypeEnum(1)  # the DAC
+)
+_DAC_RETRY_DELAY = 1.0
+
+
 class MatterController(AbstractController[MatterDevice, MatterParameter, NoSettings, MatterDeviceState]):
     """Bridges the Hub to Matter devices through a Matter controller server (matterjs-server).
 
@@ -111,6 +119,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         # Instance state (not class-level): the mapper is wired with the framework's UUID
         # generators, and the discoveries dict must not be shared across instances.
         self._mapper = MatterMapper(self.device_uuid, self.parameter_uuid)
+        self._dac_device_ids: dict[int, UUID] = {}
         self._majordom_descoveries = dict()
 
     # -------------------------------------------------------------------------
@@ -438,8 +447,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def _fill_draft(self, discovery: Discovery, draft: MatterDeviceState, node: MatterNode) -> MatterDeviceState:
         """Maps a node on the fabric into the draft the Hub gave; the Hub saves it and follows the device after."""
-        if (physical_id := self._node_device_id(node)) is None:
-            raise MatterUnexpectedError(f"Node {node.node_id} reports neither a SerialNumber nor a UniqueID")
+        if (physical_id := await self._resolve_node_device_id(node)) is None:
+            raise MatterUnexpectedError(
+                f"Node {node.node_id} reports neither a SerialNumber nor a UniqueID, and its attestation certificate "
+                "couldn't be read"
+            )
         draft.physical_id = physical_id
         await self.check_device_id(physical_id, draft)
         draft.available = node.available
@@ -861,7 +873,29 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         if 0 not in node.endpoints:
             return None
         info = node.device_info
-        return self._mapper.device_uuid(info.vendorID, info.productID, info.serialNumber, info.uniqueID)
+        by_info = self._mapper.device_uuid(info.vendorID, info.productID, info.serialNumber, info.uniqueID)
+        # the DAC needs a call to the node: a node known only by it is matched here once a pairing has fetched it
+        return by_info or self._dac_device_ids.get(node.node_id)
+
+    async def _resolve_node_device_id(self, node: MatterNode) -> UUID | None:
+        """_node_device_id, else the node's Device Attestation Certificate (cached): no serial, no unique id."""
+        if (device_id := self._node_device_id(node)) is not None or 0 not in node.endpoints:
+            return device_id
+        for attempt in range(_DAC_ATTEMPTS):
+            try:
+                # the first call right after a power loss may find the channel closed
+                response = await self._require_matter_client().send_device_command(node.node_id, 0, _DAC_REQUEST)
+                certificate = response["certificate"] if isinstance(response, dict) else response.certificate
+                device_id = self._mapper.dac_uuid(base64.b64decode(certificate))
+            except Exception as e:
+                logging.info(
+                    f"[{self.name}] node {node.node_id}: attestation certificate read {attempt + 1} failed: {e!r}"
+                )
+                await asyncio.sleep(_DAC_RETRY_DELAY)
+            else:
+                self._dac_device_ids[node.node_id] = device_id
+                return device_id
+        return None
 
     def _require_node(self, device: MatterDevice) -> MatterNode:
         node = self._require_matter_client().get_node(device.node_id)

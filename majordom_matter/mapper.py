@@ -1,5 +1,6 @@
 import base64
 import enum
+import hashlib
 import inspect
 import logging
 from collections.abc import Callable
@@ -97,6 +98,10 @@ class MatterMapper:
         if not (stable := (serial_number or "").strip() or (unique_id or "").strip()):
             return None
         return self._device_uuid(f"{vendor_id or 0:04x}/{product_id or 0:04x}/{stable}")
+
+    def dac_uuid(self, dac_der: bytes) -> UUID:
+        """Last identity fallback: the Device Attestation Certificate is unique per unit: no vendor/product prefix."""
+        return self._device_uuid(hashlib.sha256(dac_der).digest())
 
     def attribute_parameter_uuid(self, physical_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
         return self._parameter_uuid(physical_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")

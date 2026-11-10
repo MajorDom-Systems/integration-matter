@@ -7,6 +7,8 @@ in the dockerized MVD suite, test_controller.py.
 """
 
 import asyncio
+import base64
+import hashlib
 import logging
 from dataclasses import replace
 from functools import partial
@@ -28,7 +30,7 @@ from majordom_integration_sdk import (
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
-from matter_server.client.exceptions import CannotConnect
+from matter_server.client.exceptions import CannotConnect, InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 
@@ -1258,3 +1260,70 @@ async def test_the_same_serial_from_two_vendors_gets_two_ids(controller):
     assert ctrl._node_device_id(load_on_off_light_node()) != ctrl._node_device_id(
         load_on_off_light_node({"0/40/2": 4999})
     )
+
+
+def _dac_node() -> MatterNode:
+    return load_on_off_light_node({"0/40/15": "", "0/40/18": ""})
+
+
+def _serve_dac(monkeypatch, ctrl, answers: list[Any]):
+    calls: list[Any] = []
+
+    async def send_device_command(node_id, endpoint_id, command, **kwargs):
+        calls.append((node_id, endpoint_id, command))
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return {"certificate": base64.b64encode(answer).decode()}
+
+    monkeypatch.setattr(ctrl._matter_client, "send_device_command", send_device_command)
+    monkeypatch.setattr("majordom_matter.controller._DAC_RETRY_DELAY", 0)
+    return calls
+
+
+async def test_the_attestation_certificate_is_read_only_without_a_serial_number_and_unique_id(controller, monkeypatch):
+    ctrl, _ = controller
+    calls = _serve_dac(monkeypatch, ctrl, [b"dac"])
+    with_serial = load_on_off_light_node()
+    assert await ctrl._resolve_node_device_id(with_serial) == ctrl._node_device_id(with_serial)
+    assert await ctrl._resolve_node_device_id(load_on_off_light_node({"0/40/15": ""})) is not None
+    assert calls == []
+    assert await ctrl._resolve_node_device_id(_dac_node()) == ctrl.device_uuid(hashlib.sha256(b"dac").digest())
+    assert len(calls) == 1 and calls[0][2].certificateType == 1
+
+
+async def test_the_same_attestation_certificate_gives_the_same_id(controller, monkeypatch):
+    ctrl, _ = controller
+    _serve_dac(monkeypatch, ctrl, [b"dac-a"])
+    first = await ctrl._resolve_node_device_id(_dac_node())
+    assert await ctrl._resolve_node_device_id(_dac_node()) == first
+    _serve_dac(monkeypatch, ctrl, [b"dac-b"])
+    other = _dac_node()
+    other.node_data.node_id += 1
+    assert await ctrl._resolve_node_device_id(other) != first
+
+
+async def test_a_read_attestation_certificate_identifies_the_node_for_the_sync_paths(controller, monkeypatch):
+    ctrl, _ = controller
+    _serve_dac(monkeypatch, ctrl, [b"dac"])
+    node = _dac_node()
+    assert ctrl._node_device_id(node) is None
+    resolved = await ctrl._resolve_node_device_id(node)
+    assert resolved is not None and ctrl._node_device_id(node) == resolved
+
+
+async def test_a_first_attestation_read_failing_is_retried_once(controller, monkeypatch):
+    ctrl, _ = controller
+    calls = _serve_dac(monkeypatch, ctrl, [InvalidState("Channel is closed"), b"dac"])
+    assert await ctrl._resolve_node_device_id(_dac_node()) is not None
+    assert len(calls) == 2
+
+
+async def test_a_node_with_no_identity_at_all_is_refused(controller, monkeypatch):
+    ctrl, _ = controller
+    calls = _serve_dac(monkeypatch, ctrl, [InvalidState("Channel is closed")])
+    node = _dac_node()
+    assert await ctrl._resolve_node_device_id(node) is None
+    assert len(calls) == 2
+    with pytest.raises(MatterUnexpectedError):
+        await ctrl._fill_draft(None, None, node)  # type: ignore[arg-type]

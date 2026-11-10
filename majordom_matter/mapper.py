@@ -87,8 +87,16 @@ class MatterMapper:
         """UUID for a discovery, keyed on its (pre-commissioning) Matter identity string."""
         return self._device_uuid(matter_id)
 
-    def device_uuid(self, node_id: int, product_name: str | None) -> UUID:
-        return self._device_uuid(f"{node_id}_{product_name}")
+    def device_uuid(
+        self, vendor_id: int | None, product_id: int | None, serial_number: str | None, unique_id: str | None
+    ) -> UUID | None:
+        """Keyed on SerialNumber, else UniqueID (both survive a reset on some makers); never the node id.
+
+        None when the node reports neither. Vendor and product ids keep serials of different makers apart.
+        """
+        if not (stable := (serial_number or "").strip() or (unique_id or "").strip()):
+            return None
+        return self._device_uuid(f"{vendor_id or 0:04x}/{product_id or 0:04x}/{stable}")
 
     def attribute_parameter_uuid(self, physical_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
         return self._parameter_uuid(physical_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")

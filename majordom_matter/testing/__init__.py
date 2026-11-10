@@ -50,10 +50,11 @@ def draft_for(discovery: Discovery) -> MatterDeviceState:
     )
 
 
-def load_on_off_light_node() -> MatterNode:
+def load_on_off_light_node(attributes: dict[str, Any] | None = None) -> MatterNode:
     """A real `MatterNode` for a captured MVD on-off-light — the same construction the live
     client applies to node data received over the websocket."""
     data = json.loads(_FIXTURE.read_text())
+    data["attributes"].update(attributes or {})
     return MatterNode(dataclass_from_dict(MatterNodeData, data))
 
 

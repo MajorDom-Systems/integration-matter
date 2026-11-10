@@ -438,7 +438,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def _fill_draft(self, discovery: Discovery, draft: MatterDeviceState, node: MatterNode) -> MatterDeviceState:
         """Maps a node on the fabric into the draft the Hub gave; the Hub saves it and follows the device after."""
-        physical_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
+        if (physical_id := self._node_device_id(node)) is None:
+            raise MatterUnexpectedError(f"Node {node.node_id} reports neither a SerialNumber nor a UniqueID")
         draft.physical_id = physical_id
         await self.check_device_id(physical_id, draft)
         draft.available = node.available
@@ -857,7 +858,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     def _node_device_id(self, node: MatterNode) -> UUID | None:
         """None for a node matterjs-server hasn't interviewed yet: without its attributes it has no device info."""
-        return self._mapper.device_uuid(node.node_id, node.device_info.productName) if 0 in node.endpoints else None
+        if 0 not in node.endpoints:
+            return None
+        info = node.device_info
+        return self._mapper.device_uuid(info.vendorID, info.productID, info.serialNumber, info.uniqueID)
 
     def _require_node(self, device: MatterDevice) -> MatterNode:
         node = self._require_matter_client().get_node(device.node_id)

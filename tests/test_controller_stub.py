@@ -940,11 +940,11 @@ async def test_a_failure_other_than_an_outage_on_reconnect_reports_matter_crashe
 async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_reconnecting(controller, monkeypatch):
     ctrl, output = controller
     first = await _commission(ctrl)
-    second = load_on_off_light_node()
+    second = load_on_off_light_node({"0/40/15": "OTHER_SN"})
     second.node_data.node_id = FAKE_NODE_ID + 1  # on the fabric without a device: added as it is
     on_fabric = FakeMatterClient.get_nodes
     monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), second])
-    second_id = ctrl._mapper.device_uuid(second.node_id, second.device_info.productName)
+    second_id = ctrl._node_device_id(second)
     discovery = output.received_discoveries[0].model_copy(
         update={"id": second_id, "expected_credentials_options": [CredentialsType.none]}
     )
@@ -1099,7 +1099,7 @@ async def test_a_pairing_reports_and_saves_nothing_it_is_the_hubs_to_do(controll
         discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
     )
     node = cast(FakeMatterClient, ctrl._matter_client).get_node(FAKE_NODE_ID)
-    assert draft.physical_id == ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
+    assert draft.physical_id == ctrl._node_device_id(node)
     assert draft.integration_data.node_id == FAKE_NODE_ID and draft.parameters and draft.available
     assert output.connected_devices == [] and output.events == []
     async with ctrl.platform.device_repository(ctrl) as repo:
@@ -1152,7 +1152,7 @@ async def test_an_id_another_record_holds_is_refused_before_anything_is_mapped(c
     await _wait(lambda: bool(ctrl.discoveries))
     (commissionable,) = ctrl.discoveries.values()
     node = load_on_off_light_node()
-    taken = ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
+    taken = ctrl._node_device_id(node)
     holder = uuid4()
     ctrl.platform = build_test_platform(
         store={holder: {"name": "Old bulb", "is_paired": False, "physical_id": str(taken)}}
@@ -1180,7 +1180,7 @@ async def test_the_record_the_user_picked_takes_the_node_in_place_of_its_old_one
     await _wait(lambda: bool(ctrl.discoveries))
     (commissionable,) = ctrl.discoveries.values()
     node = load_on_off_light_node()
-    taken = ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
+    taken = ctrl._node_device_id(node)
     holder = uuid4()
     ctrl.platform = build_test_platform(store={holder: {"name": "Old bulb", "physical_id": str(taken)}})
 
@@ -1235,3 +1235,26 @@ async def test_hand_overs_in_place_leave_no_ended_tasks_behind(controller):
         assert await ctrl.platform_facts_did_change(before)
         await asyncio.sleep(0.02)
     assert len(ctrl._background_tasks) <= running + 1
+
+
+async def test_identity_is_the_serial_number_and_survives_a_new_node_id(controller):
+    ctrl, _ = controller
+    node = load_on_off_light_node()
+    before = ctrl._node_device_id(node)
+    node.node_data.node_id += 1
+    assert ctrl._node_device_id(node) == before
+
+
+async def test_identity_falls_back_to_unique_id_without_a_serial_number(controller):
+    ctrl, _ = controller
+    with_serial = ctrl._node_device_id(load_on_off_light_node())
+    by_unique_id = ctrl._node_device_id(load_on_off_light_node({"0/40/15": ""}))
+    assert by_unique_id is not None and by_unique_id != with_serial
+    assert ctrl._node_device_id(load_on_off_light_node({"0/40/15": "", "0/40/18": ""})) is None
+
+
+async def test_the_same_serial_from_two_vendors_gets_two_ids(controller):
+    ctrl, _ = controller
+    assert ctrl._node_device_id(load_on_off_light_node()) != ctrl._node_device_id(
+        load_on_off_light_node({"0/40/2": 4999})
+    )

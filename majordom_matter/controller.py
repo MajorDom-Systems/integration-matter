@@ -624,7 +624,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
             exception_class, message = match
             async with self.platform.device_repository(self) as device_repository:
-                device_state = await device_repository.state(device.physical_id, MatterDeviceState)
+                device_state = await device_repository.state(physical_id=device.physical_id, as_=MatterDeviceState)
                 if device_state is not None:
                     # state() returns None only if the device was unpaired/removed out from under us;
                     # nothing to prune then — just surface the original command error below.

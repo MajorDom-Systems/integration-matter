@@ -102,8 +102,8 @@ async def test_pairs_and_maps_parameters(controller):
 
     assert output.connected_devices == [device_id]
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id)
     assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
     # The on-off-light exposes the OnOff cluster (endpoint 13) → at least a toggle command maps.
     assert state is not None and len(state.parameters) > 0
@@ -113,8 +113,8 @@ async def test_send_command_reaches_the_client(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
 
     command_param = next(p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command)
     await ctrl.send_command(
@@ -143,7 +143,7 @@ async def test_unpair_removes_the_node(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     await ctrl.unpair(device)
     assert FAKE_NODE_ID in ctrl._matter_client.removed_nodes
@@ -153,7 +153,7 @@ async def test_fetch_emits_events(controller):
     ctrl, output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     before = len(output.events)
     await ctrl.fetch(device)
@@ -166,7 +166,7 @@ async def test_identify_sends_identify_command(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     await ctrl.identify(device)
     # The on-off-light carries the Identify cluster (3) on its application endpoint.
@@ -190,8 +190,8 @@ async def _move_to_level_parameter(ctrl, device_id: UUID):
     from chip.clusters.Objects import LevelControl
 
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     param_id = ctrl._mapper.command_parameter_uuid(
         device_id, 13, LevelControl.id, LevelControl.Commands.MoveToLevel.command_id
     )
@@ -367,8 +367,8 @@ async def test_timed_invoke_follows_the_command(controller, monkeypatch):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     timeouts: list[int | None] = []
 
     async def send_device_command(node_id, endpoint_id, command, timed_request_timeout_ms=None, **kwargs):
@@ -400,7 +400,7 @@ async def test_hidden_main_candidate_does_not_block_a_visible_one(controller, mo
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        state = await repo.state(device_id, MatterDeviceState)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     assert state.main_parameter == ctrl._mapper.command_parameter_uuid(device_id, 13, OnOff.id, 0x02)
     assert state.can_set_main_parameter(state.main_parameter)
 
@@ -412,7 +412,7 @@ async def test_fetch_normalizes_values_like_the_subscription(controller):
     device_id = await _commission(ctrl)
     output.events.clear()  # the pairing's fetch
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
     last_network_id = ctrl._mapper.attribute_parameter_uuid(device_id, 0, NetworkCommissioning.id, 0x06)
     server_list = ctrl._mapper.attribute_parameter_uuid(device_id, 0, Descriptor.id, 0x01)
     capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
@@ -437,7 +437,7 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
     device_id = await _commission(ctrl)
     output.events.clear()  # the pairing's fetch
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     def subscribed(parameter_id: UUID):
         return next((e.value for e in reversed(output.events) if e.parameter_id == parameter_id), None)
@@ -603,7 +603,7 @@ async def test_a_node_on_the_fabric_without_a_device_is_added_as_it_is(monkeypat
 
     await _pair(controller, discovery, credentials)
     async with controller.platform.device_repository(controller) as repo:
-        device = await repo.get(discovery.id, as_=MatterDevice)
+        device = await repo.get(physical_id=discovery.id, as_=MatterDevice)
     assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
     assert cast(RecordingControllerOutput, controller.output).connected_devices == [discovery.id]
     assert controller.discoveries == {}
@@ -1003,8 +1003,8 @@ async def test_a_call_cut_short_by_a_lost_matterjs_server_says_why(controller, c
     ctrl, _ = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     toggle = next(p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command)
     command = DeviceCommand(device_id=device_id, parameter_id=toggle.id, value=None)
     calls = {
@@ -1103,7 +1103,7 @@ async def test_a_pairing_reports_and_saves_nothing_it_is_the_hubs_to_do(controll
     assert draft.integration_data.node_id == FAKE_NODE_ID and draft.parameters and draft.available
     assert output.connected_devices == [] and output.events == []
     async with ctrl.platform.device_repository(ctrl) as repo:
-        assert await repo.get(draft.physical_id) is None
+        assert await repo.get(physical_id=draft.physical_id) is None
 
 
 async def test_a_failure_after_the_commissioning_leaves_the_node_on_the_fabric_to_retry(controller, monkeypatch):
@@ -1201,7 +1201,7 @@ async def test_fetch_follows_the_device_once_however_often_it_runs(controller):
     ctrl, output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
     client = cast(FakeMatterClient, ctrl._matter_client)
     subscriptions = len(client._subscriptions)
     assert subscriptions  # the first fetch subscribed
@@ -1220,7 +1220,7 @@ async def test_fetch_of_a_node_that_does_not_answer_is_not_a_failure(controller)
     ctrl, output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
     ctrl._matter_client.get_node(FAKE_NODE_ID).node_data.available = False
     output.events.clear()
     await ctrl.fetch(device)

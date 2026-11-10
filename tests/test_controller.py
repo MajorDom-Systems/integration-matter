@@ -59,8 +59,8 @@ async def test_pairs_a_discovered_device(matter):
     device_id = draft.physical_id
     assert device_id != discovery.id
     async with repository.session() as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id)
     assert device is not None and device.integration_data.node_id
     assert state is not None and len(state.parameters) > 0
 
@@ -74,7 +74,7 @@ async def test_unpairs_a_device(matter):
     draft = await _pair_draft(controller, repository, discovery)
 
     async with repository.session() as repo:
-        device = await repo.get(draft.physical_id, as_=MatterDevice)
+        device = await repo.get(physical_id=draft.physical_id, as_=MatterDevice)
     assert device is not None
     await controller.unpair(device)  # removes the node from the fabric without error
 
@@ -86,7 +86,7 @@ async def _pair(controller, output, repository):
     discovery = next(iter(controller.discoveries.values()))
     draft = await _pair_draft(controller, repository, discovery)
     async with repository.session() as repo:
-        return await repo.get(draft.physical_id, as_=MatterDevice)
+        return await repo.get(physical_id=draft.physical_id, as_=MatterDevice)
 
 
 async def test_fetch_emits_events(matter):
@@ -125,8 +125,8 @@ async def test_commissions_every_device_type(matter):
 
     device_id = draft.physical_id
     async with repository.session() as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id)
     assert device is not None and device.integration_data.node_id, "device should commission"
     assert state is not None and len(state.parameters) > 0, "mapping should yield parameters"
     await controller.unpair(device)

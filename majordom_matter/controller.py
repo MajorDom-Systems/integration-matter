@@ -13,6 +13,7 @@ from chip.clusters.Objects import ClosureControl, Identify, OperationalState
 from majordom_integration_sdk import (
     STABLE_RUN,
     AbstractController,
+    DeviceIdTakenError,
     IntegrationError,
     Need,
     NoSettings,
@@ -71,7 +72,7 @@ def _server_call(call: str) -> Generator[None]:
         raise MatterConnectionError(f"The connection to matterjs-server ended during {call}") from None
 
 
-class MatterController(AbstractController[MatterDevice, MatterParameter, NoSettings]):
+class MatterController(AbstractController[MatterDevice, MatterParameter, NoSettings, MatterDeviceState]):
     """Bridges the Hub to Matter devices through a Matter controller server (matterjs-server).
 
     matterjs-server owns the Matter fabric and commissioning, over the hub's Bluetooth
@@ -128,6 +129,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     @property
     @override
+    def device_state_type(self) -> type[MatterDeviceState]:
+        return MatterDeviceState
+
+    @property
+    @override
     def parameter_type(self) -> type[MatterParameter]:
         return MatterParameter
 
@@ -138,6 +144,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     async def start(self):
         self._background_tasks: list[asyncio.Task] = []
         self._node_availability: dict[UUID, bool] = {}
+        self._subscribed: dict[UUID, MatterClient] = {}  # the client each device's callbacks are on
         self._matter_client_session = ClientSession()
         listener = await self._connect()
         self._background_tasks.append(listener)  # stop() ends it also after a start that fails below
@@ -404,99 +411,92 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     "manual pairing code, an 8-digit setup PIN, or an MT: QR payload"
                 )
 
-    async def pair_device(self, discovery: Discovery, credentials: ProvidedCredentials | None):
+    @override
+    async def pair_device(
+        self, discovery: Discovery, draft: MatterDeviceState, credentials: ProvidedCredentials | None
+    ) -> MatterDeviceState:
         client = self._require_matter_client()
         # a node on the fabric without a device (a pairing that ended before the save, a device deleted since) is
         # offered under its device id and taken as it is; any other discovery is commissioned with its code
         on_fabric = {self._node_device_id(n): n for n in client.get_nodes()}
         if (node := on_fabric.get(discovery.id)) is not None:
-            return await self._add_device(discovery, node)
+            return await self._fill_draft(discovery, draft, node)
         with _server_call("the pairing"):
             commissioned = await self._commission_discovery(discovery, credentials)
+        # a rollback removes the node only if this attempt commissioned it; one that was on the fabric already stays
+        draft.integration_data.node_id = commissioned.node_id
         node = client.get_node(commissioned.node_id)
         try:
-            return await self._add_device(discovery, node)
-        except Exception:  # on the fabric now, no longer commissionable: offered as it is
+            return await self._fill_draft(discovery, draft, node)
+        except DeviceIdTakenError:  # on the fabric now, no longer commissionable: offered as it is
             if discovery.id != self._by_code_id:
                 self._majordom_descoveries.pop(discovery.id, None)
                 await self.output.controller_did_lose_discovery(self, discovery.id)
             await self._offer_fabric_node(node)
             raise
 
-    async def _add_device(self, discovery: Discovery, node: MatterNode) -> UUID:
-        """Maps a node on the fabric to the device the Hub seeded under the discovery's id, and follows it."""
+    async def _fill_draft(self, discovery: Discovery, draft: MatterDeviceState, node: MatterNode) -> MatterDeviceState:
+        """Maps a node on the fabric into the draft the Hub gave; the Hub saves it and follows the device after."""
         device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
+        await self.check_device_id(device_id, draft)
+        draft.id = device_id
+        draft.available = node.available
+        # Manufacturer-provided, read-only description (BasicInformation product label).
+        draft.description = getattr(node.device_info, "productLabel", None) or None
+        # a record the user picked brings its old parameters: the node's own replace them
+        draft.parameters = []
 
-        async with self.platform.device_repository(self) as device_repository:
-            device = await device_repository.state(discovery.id, MatterDeviceState)
-            assert device
-            device.id = device_id
-            # Manufacturer-provided, read-only description (BasicInformation product label).
-            device.description = getattr(node.device_info, "productLabel", None) or None
+        for endpoint_id, endpoint in node.endpoints.items():
+            for cluster_id, cluster in endpoint.clusters.items():
+                if hasattr(cluster, "Commands"):
+                    for parameter in self._mapper.parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
+                        draft.parameters.append(MatterParameterState(**parameter.__dict__, value=None))
 
-            # Persist the commissioned node id — the Hub seeds a provisional device whose
-            # integration_data already exists (so it's never falsy), and later reconnects look
-            # the node up by this id, so set it unconditionally rather than only when absent.
-            device.integration_data.node_id = node.node_id
-
-            for endpoint_id, endpoint in node.endpoints.items():
-                for cluster_id, cluster in endpoint.clusters.items():
-                    if hasattr(cluster, "Commands"):
-                        for parameter in self._mapper.parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
-                            device.parameters.append(MatterParameterState(**parameter.__dict__, value=None))
-
-                    if hasattr(cluster, "Attributes"):
-                        for parameter in self._mapper.parse_attributes(
-                            device_id, endpoint_id, cluster_id, cluster, endpoint, node
-                        ):
-                            attribute_id = parameter.integration_data.attribute_id
-                            if attribute_id is None:
-                                raise MatterUnexpectedError(
-                                    f"Attribute parameter {parameter.name!r} has no attribute_id "
-                                    f"(endpoint {endpoint_id}, cluster {cluster_id})"
-                                )
-                            value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
-                            device.parameters.append(
-                                MatterParameterState(
-                                    **parameter.__dict__,
-                                    value=self._mapper.attribute_value(cluster_id, attribute_id, value),
-                                )
+                if hasattr(cluster, "Attributes"):
+                    for parameter in self._mapper.parse_attributes(
+                        device_id, endpoint_id, cluster_id, cluster, endpoint, node
+                    ):
+                        attribute_id = parameter.integration_data.attribute_id
+                        if attribute_id is None:
+                            raise MatterUnexpectedError(
+                                f"Attribute parameter {parameter.name!r} has no attribute_id "
+                                f"(endpoint {endpoint_id}, cluster {cluster_id})"
                             )
+                        value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
+                        draft.parameters.append(
+                            MatterParameterState(
+                                **parameter.__dict__,
+                                value=self._mapper.attribute_value(cluster_id, attribute_id, value),
+                            )
+                        )
 
-            main_parameter, default_value = self._get_main_parameter(device.id, node, device.parameters)
-            device.main_parameter = main_parameter.id if main_parameter is not None else None
-            if main_parameter is not None and default_value is not None:
-                if main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
-                    main_parameter.default_value = self._mapper.normalize_value(default_value)
-                elif isinstance(default_value, dict):
-                    # A command main parameter is tapped with a fixed argument set (a dict).
-                    main_parameter.integration_data.default_arguments = default_value
-                else:
-                    raise MatterUnexpectedError(
-                        f"Command main parameter {main_parameter.id} expected dict default arguments, "
-                        f"got {type(default_value).__name__}: {default_value!r}"
-                    )
-            if main_parameter is not None and main_parameter.data_type is ParameterDataType.struct:
-                # A struct is a one-tap main parameter only with a default_value: the id-keyed
-                # arguments a tap sends.
-                arguments = main_parameter.integration_data.default_arguments or {}
-                main_parameter.default_value = {
-                    str(f.id): arguments[f.name] for f in main_parameter.fields or () if f.name in arguments
-                }
+        main_parameter, default_value = self._get_main_parameter(draft.id, node, draft.parameters)
+        draft.main_parameter = main_parameter.id if main_parameter is not None else None
+        if main_parameter is not None and default_value is not None:
+            if main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
+                main_parameter.default_value = self._mapper.normalize_value(default_value)
+            elif isinstance(default_value, dict):
+                # A command main parameter is tapped with a fixed argument set (a dict).
+                main_parameter.integration_data.default_arguments = default_value
+            else:
+                raise MatterUnexpectedError(
+                    f"Command main parameter {main_parameter.id} expected dict default arguments, "
+                    f"got {type(default_value).__name__}: {default_value!r}"
+                )
+        if main_parameter is not None and main_parameter.data_type is ParameterDataType.struct:
+            # A struct is a one-tap main parameter only with a default_value: the id-keyed
+            # arguments a tap sends.
+            arguments = main_parameter.integration_data.default_arguments or {}
+            main_parameter.default_value = {
+                str(f.id): arguments[f.name] for f in main_parameter.fields or () if f.name in arguments
+            }
 
-            await device_repository.save(device, discovery.id)
-
-        # only now that the Hub's row under its id moved to the device's: a pairing started from it saves one there
+        draft.integration_data.node_id = node.node_id  # last: a rollback removes the node once it is set
         self._majordom_descoveries.pop(discovery.id, None)
         # a pairing landing after stop() keeps its device rather than failing: the node is commissioned onto the fabric
-        # and its row saved already, so failing it would leave a node no device stands for
-        if self._matter_client is None:
-            return device_id  # Matter stopped meanwhile: its next start follows the device
-        if discovery.id == self._by_code_id:
+        if discovery.id == self._by_code_id and self._matter_client is not None:
             await self._offer_commissioning_by_code()  # the next device is added the same way
-        await self.output.controller_did_connect_device(self, device_id)
-        self._subscription(device_id, node)
-        return device_id
+        return draft
 
     async def _commission_discovery(
         self, discovery: Discovery, credentials: ProvidedCredentials | None
@@ -526,6 +526,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def unpair(self, device: MatterDevice):
         client = self._require_matter_client()
+        self._subscribed.pop(device.id, None)
+        self._node_availability.pop(device.id, None)
         # a device that never finished commissioning (or that matterjs-server lost) has no node to remove
         if any(node.node_id == device.node_id for node in client.get_nodes()):
             with _server_call("the unpairing"):
@@ -541,6 +543,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def fetch(self, device: MatterDevice):
         node = self._require_node(device)
+        self._subscription(device.id, node)
+        if not node.available:
+            return  # asleep or away: the availability callback tells the Hub once it answers
 
         events = []
         for endpoint_id, endpoint in node.endpoints.items():
@@ -774,6 +779,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         without it all callbacks would share the last loop iteration's values.
         """
         client = self._require_matter_client()
+        if self._subscribed.get(device_id) is client:
+            return
+        self._subscribed[device_id] = client
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, cluster in endpoint.clusters.items():
                 if not hasattr(cluster, "Attributes"):

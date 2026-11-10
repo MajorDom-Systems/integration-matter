@@ -22,14 +22,31 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
+from majordom_integration_sdk.schemas.device import Discovery
 from matter_server.client.exceptions import CannotConnect, InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import NodeNotExists
 from matter_server.common.helpers.util import dataclass_from_dict
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
+from majordom_matter.model import MatterDeviceState
+
 _FIXTURE = Path(__file__).parent / "fixtures" / "on_off_light_node.json"
+
+
+def draft_for(discovery: Discovery) -> MatterDeviceState:
+    """The draft the Hub hands `pair_device`: its id the discovery's, the rest the user's form."""
+    return MatterDeviceState(
+        id=discovery.id,
+        name="Test",
+        room_id=UUID(int=1),
+        transport=discovery.transport,
+        integration=discovery.integration,
+        manufacturer=None,
+        parameters=[],
+    )
 
 
 def load_on_off_light_node() -> MatterNode:

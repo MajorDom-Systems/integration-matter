@@ -13,7 +13,6 @@ from chip.clusters.Objects import ClosureControl, Identify, OperationalState
 from majordom_integration_sdk import (
     STABLE_RUN,
     AbstractController,
-    DeviceIdTakenError,
     IntegrationError,
     Need,
     NoSettings,
@@ -191,10 +190,16 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def _offer_fabric_node(self, node: MatterNode):
         """A node on the fabric without a device: pair_device adds it as it is, without a code."""
-        if (discovery_id := self._node_device_id(node)) is None:
+        if (discovery := self._fabric_discovery(node)) is None:
             logging.info(f"[{self.name}] node {node.node_id} isn't interviewed yet: offered at the next start")
             return
-        discovery = Discovery(
+        self._majordom_descoveries[discovery.id] = discovery
+        await self.output.controller_did_receive_discovery(self, discovery)
+
+    def _fabric_discovery(self, node: MatterNode) -> Discovery | None:
+        if (discovery_id := self._node_device_id(node)) is None:
+            return None
+        return Discovery(
             id=discovery_id,
             integration=NonEmptyStr(self.key),
             expected_credentials_options=[CredentialsType.none],
@@ -205,8 +210,6 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             device_category=None,
             device_icon=None,
         )
-        self._majordom_descoveries[discovery_id] = discovery
-        await self.output.controller_did_receive_discovery(self, discovery)
 
     async def stop(self):
         self._majordom_descoveries.clear()
@@ -423,12 +426,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             return await self._fill_draft(discovery, draft, node)
         with _server_call("the pairing"):
             commissioned = await self._commission_discovery(discovery, credentials)
-        # a rollback removes the node only if this attempt commissioned it; one that was on the fabric already stays
-        draft.integration_data.node_id = commissioned.node_id
         node = client.get_node(commissioned.node_id)
         try:
             return await self._fill_draft(discovery, draft, node)
-        except DeviceIdTakenError:  # on the fabric now, no longer commissionable: offered as it is
+        except Exception:  # a taken id too. On the fabric now, no longer commissionable: offered as it is, to retry
             if discovery.id != self._by_code_id:
                 self._majordom_descoveries.pop(discovery.id, None)
                 await self.output.controller_did_lose_discovery(self, discovery.id)
@@ -491,8 +492,12 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 str(f.id): arguments[f.name] for f in main_parameter.fields or () if f.name in arguments
             }
 
-        draft.integration_data.node_id = node.node_id  # last: a rollback removes the node once it is set
+        draft.integration_data.node_id = node.node_id
         self._majordom_descoveries.pop(discovery.id, None)
+        # Offered as a fabric node until the Hub saves the device (it fetches it then): one it never saves is
+        # retried from there, as it is. Not announced: the app is just pairing it
+        if self._matter_client is not None and (fabric := self._fabric_discovery(node)) is not None:
+            self._majordom_descoveries[fabric.id] = fabric
         # a pairing landing after stop() keeps its device rather than failing: the node is commissioned onto the fabric
         if discovery.id == self._by_code_id and self._matter_client is not None:
             await self._offer_commissioning_by_code()  # the next device is added the same way
@@ -542,6 +547,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
+        self._majordom_descoveries.pop(device.id, None)  # the Hub saved it: no longer offered
         node = self._require_node(device)
         self._subscription(device.id, node)
         if not node.available:

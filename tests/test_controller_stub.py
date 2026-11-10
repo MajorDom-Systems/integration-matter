@@ -1104,7 +1104,7 @@ async def test_a_pairing_reports_and_saves_nothing_it_is_the_hubs_to_do(controll
         assert await repo.get(draft.id) is None
 
 
-async def test_a_failure_after_the_commissioning_leaves_the_node_in_the_draft_for_the_rollback(controller, monkeypatch):
+async def test_a_failure_after_the_commissioning_leaves_the_node_on_the_fabric_to_retry(controller, monkeypatch):
     ctrl, output = controller
     await _wait(lambda: bool(ctrl.discoveries))
     (discovery,) = ctrl.discoveries.values()
@@ -1112,16 +1112,37 @@ async def test_a_failure_after_the_commissioning_leaves_the_node_in_the_draft_fo
     def broken(*args: Any):
         raise MatterUnexpectedError("mapping failed")
 
-    monkeypatch.setattr(MatterController, "_get_main_parameter", broken)
-    draft = draft_for(discovery)
-    with pytest.raises(MatterUnexpectedError):
-        await ctrl.pair_device(discovery, draft, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    assert draft.integration_data.node_id == FAKE_NODE_ID
+    with monkeypatch.context() as patched:
+        patched.setattr(MatterController, "_get_main_parameter", broken)
+        with pytest.raises(MatterUnexpectedError):
+            await ctrl.pair_device(
+                discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+            )
 
-    await ctrl.unpair(draft)  # the Hub's rollback
-    assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == [FAKE_NODE_ID]
-    assert ctrl.discoveries.keys() == {discovery.id}  # still commissionable, no node offered
-    assert output.lost_discoveries == []
+    client = cast(FakeMatterClient, ctrl._matter_client)
+    assert client.removed_nodes == []  # nothing undone: the node stays on the fabric
+    (fabric,) = ctrl.discoveries.values()  # no longer commissionable: offered as it is
+    assert fabric.id != discovery.id and output.lost_discoveries == [discovery.id]
+    device = await _pair(ctrl, fabric, None)  # the retry, from a Hub-side clean state
+    assert device.integration_data.node_id == FAKE_NODE_ID and device.parameters
+    assert ctrl.discoveries == {} and client.removed_nodes == []
+
+
+async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node(controller):
+    ctrl, output = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    first = await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+    # the Hub refused the id or failed to save: nothing saved, nothing undone
+
+    assert ctrl.discoveries.keys() == {first.id}
+    again = await _pair(ctrl, ctrl.discoveries[first.id], None)
+
+    assert again.id == first.id and again.integration_data.node_id == FAKE_NODE_ID
+    assert ctrl.discoveries == {}  # saved and fetched: offered no more
+    assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
 
 
 async def test_an_id_another_record_holds_is_refused_before_anything_is_mapped(controller):

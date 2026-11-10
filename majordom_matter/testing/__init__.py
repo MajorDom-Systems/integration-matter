@@ -22,7 +22,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from majordom_integration_sdk.schemas.device import Discovery
 from matter_server.client.exceptions import CannotConnect, InvalidState
@@ -37,9 +37,10 @@ _FIXTURE = Path(__file__).parent / "fixtures" / "on_off_light_node.json"
 
 
 def draft_for(discovery: Discovery) -> MatterDeviceState:
-    """The draft the Hub hands `pair_device`: its id the discovery's, the rest the user's form."""
+    """The draft the Hub hands `pair_device`: a fresh id, the discovery id as physical id, the rest the user's form."""
     return MatterDeviceState(
-        id=discovery.id,
+        id=uuid4(),
+        physical_id=discovery.id,
         name="Test",
         room_id=UUID(int=1),
         transport=discovery.transport,

@@ -175,18 +175,18 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             devices = await device_repository.get_all(as_=MatterDevice)
         for device in devices:
             if node := nodes.get(device.integration_data.node_id):
-                self._subscription(device.id, node)
+                self._subscription(device.physical_id, node)
                 device_nodes.append(device.integration_data.node_id)
             else:  # gone from the fabric: a commissioning that failed, a reset matterjs-server
-                await self.output.controller_did_lose_device(self, device.id)
+                await self.output.controller_did_lose_device(self, device.physical_id)
 
         for node in client.get_nodes():
             if node.node_id not in device_nodes:
                 await self._offer_fabric_node(node)
         # the Hub, or a lost server, made them unavailable; a copy: a pairing may land meanwhile
-        for device_id, available in list(self._node_availability.items()):
+        for physical_id, available in list(self._node_availability.items()):
             if available:
-                await self.output.controller_did_connect_device(self, device_id)
+                await self.output.controller_did_connect_device(self, physical_id)
 
     async def _offer_fabric_node(self, node: MatterNode):
         """A node on the fabric without a device: pair_device adds it as it is, without a code."""
@@ -323,9 +323,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 failed_at = loop.time()
                 if outage_since is None or failed_at - connected_at >= self._STABLE_CONNECTION:
                     outage_since, delay = failed_at, self._RECONNECT_DELAY  # a new outage, else its delay grows on
-                for device_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
+                for physical_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
                     if available:
-                        await self.output.controller_did_lose_device(self, device_id)
+                        await self.output.controller_did_lose_device(self, physical_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
                 is_reported = False
@@ -438,9 +438,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def _fill_draft(self, discovery: Discovery, draft: MatterDeviceState, node: MatterNode) -> MatterDeviceState:
         """Maps a node on the fabric into the draft the Hub gave; the Hub saves it and follows the device after."""
-        device_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
-        await self.check_device_id(device_id, draft)
-        draft.id = device_id
+        physical_id = self._mapper.device_uuid(node.node_id, node.device_info.productName)
+        draft.physical_id = physical_id
+        await self.check_device_id(physical_id, draft)
         draft.available = node.available
         # Manufacturer-provided, read-only description (BasicInformation product label).
         draft.description = getattr(node.device_info, "productLabel", None) or None
@@ -450,12 +450,12 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, cluster in endpoint.clusters.items():
                 if hasattr(cluster, "Commands"):
-                    for parameter in self._mapper.parse_commands(device_id, endpoint_id, cluster_id, cluster, node):
+                    for parameter in self._mapper.parse_commands(physical_id, endpoint_id, cluster_id, cluster, node):
                         draft.parameters.append(MatterParameterState(**parameter.__dict__, value=None))
 
                 if hasattr(cluster, "Attributes"):
                     for parameter in self._mapper.parse_attributes(
-                        device_id, endpoint_id, cluster_id, cluster, endpoint, node
+                        physical_id, endpoint_id, cluster_id, cluster, endpoint, node
                     ):
                         attribute_id = parameter.integration_data.attribute_id
                         if attribute_id is None:
@@ -471,7 +471,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                             )
                         )
 
-        main_parameter, default_value = self._get_main_parameter(draft.id, node, draft.parameters)
+        main_parameter, default_value = self._get_main_parameter(draft.physical_id, node, draft.parameters)
         draft.main_parameter = main_parameter.id if main_parameter is not None else None
         if main_parameter is not None and default_value is not None:
             if main_parameter.integration_data.type is MatterParameterTypeEnum.attribute:
@@ -531,8 +531,8 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
     async def unpair(self, device: MatterDevice):
         client = self._require_matter_client()
-        self._subscribed.pop(device.id, None)
-        self._node_availability.pop(device.id, None)
+        self._subscribed.pop(device.physical_id, None)
+        self._node_availability.pop(device.physical_id, None)
         # a device that never finished commissioning (or that matterjs-server lost) has no node to remove
         if any(node.node_id == device.node_id for node in client.get_nodes()):
             with _server_call("the unpairing"):
@@ -547,9 +547,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     await self._require_matter_client().send_device_command(device.node_id, endpoint_id, command)
 
     async def fetch(self, device: MatterDevice):
-        self._majordom_descoveries.pop(device.id, None)  # the Hub saved it: no longer offered
+        self._majordom_descoveries.pop(device.physical_id, None)  # the Hub saved it: no longer offered
         node = self._require_node(device)
-        self._subscription(device.id, node)
+        self._subscription(device.physical_id, node)
         if not node.available:
             return  # asleep or away: the availability callback tells the Hub once it answers
 
@@ -564,11 +564,11 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     attribute_id = getattr(attribute, "attribute_id", -1)
                     value = node.get_attribute_value(endpoint_id, cluster_id, attribute_id)
                     parameter_id = self._mapper.attribute_parameter_uuid(
-                        device.id, endpoint_id, cluster_id, attribute_id
+                        device.physical_id, endpoint_id, cluster_id, attribute_id
                     )
                     events.append(
                         DeviceParameterChange(
-                            device_id=device.id,
+                            physical_id=device.physical_id,
                             parameter_id=parameter_id,
                             value=self._mapper.attribute_value(cluster_id, attribute_id, value),
                         )
@@ -592,7 +592,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
             with _server_call("the command"):
                 if parameter.integration_data.type is MatterParameterTypeEnum.command:
-                    await self._execute_cluster_command(node, endpoint_id, cluster, parameter, command)
+                    await self._execute_cluster_command(device, node, endpoint_id, cluster, parameter, command)
                 elif parameter.integration_data.type is MatterParameterTypeEnum.attribute:
                     attribute_id = parameter.integration_data.attribute_id
                     if attribute_id is not None and AttributeKey(cluster_id, attribute_id) in STATE_TOGGLE_ATTRIBUTES:
@@ -623,15 +623,17 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
             exception_class, message = match
             async with self.platform.device_repository(self) as device_repository:
-                device_state = await device_repository.state(device.id, MatterDeviceState)
+                device_state = await device_repository.state(device.physical_id, MatterDeviceState)
                 if device_state is not None:
                     # state() returns None only if the device was unpaired/removed out from under us;
                     # nothing to prune then — just surface the original command error below.
                     device_state.parameters = [p for p in device_state.parameters if p.id != parameter.id]
                     device.integration_data.black_list.append(parameter.id)
-                    await device_repository.save(device, device.id)
+                    await device_repository.save(device)
                 else:
-                    logging.warning(f"Device {device.id} is gone; skipped blacklisting parameter {parameter.id}")
+                    logging.warning(
+                        f"Device {device.physical_id} is gone; skipped blacklisting parameter {parameter.id}"
+                    )
 
             logging.error(f"Command '{parameter.name}' is {message} and will be removed")
             raise exception_class(f"Command '{parameter.name}' failed: {message}") from None
@@ -778,16 +780,16 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
     # Device -> Hub: subscriptions & availability
     # -------------------------------------------------------------------------
 
-    def _subscription(self, device_id: UUID, node: MatterNode):
+    def _subscription(self, physical_id: UUID, node: MatterNode):
         """
         Registers attribute-change callbacks for every attribute on the node.
-        Uses _make_callback to capture (device_id, parameter_id) by value —
+        Uses _make_callback to capture (physical_id, parameter_id) by value —
         without it all callbacks would share the last loop iteration's values.
         """
         client = self._require_matter_client()
-        if self._subscribed.get(device_id) is client:
+        if self._subscribed.get(physical_id) is client:
             return
-        self._subscribed[device_id] = client
+        self._subscribed[physical_id] = client
         for endpoint_id, endpoint in node.endpoints.items():
             for cluster_id, cluster in endpoint.clusters.items():
                 if not hasattr(cluster, "Attributes"):
@@ -797,10 +799,10 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                         continue
                     attribute_path = f"{endpoint_id}/{cluster_id}/{attribute.attribute_id}"
                     parameter_id = self._mapper.attribute_parameter_uuid(
-                        device_id, endpoint_id, cluster_id, attribute.attribute_id
+                        physical_id, endpoint_id, cluster_id, attribute.attribute_id
                     )
                     client.subscribe_events(
-                        self._make_callback(device_id, parameter_id, cluster_id, attribute.attribute_id),
+                        self._make_callback(physical_id, parameter_id, cluster_id, attribute.attribute_id),
                         EventType.ATTRIBUTE_UPDATED,
                         node.node_id,
                         attribute_path,
@@ -810,17 +812,17 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         # the Hub keeps running (not just at Hub startup) — NODE_UPDATED fires on that and
         # other node-info changes, so track the last known value and only act on a real
         # transition instead of re-signalling on every unrelated update.
-        self._node_availability[device_id] = node.available
+        self._node_availability[physical_id] = node.available
         client.subscribe_events(
-            self._make_availability_callback(device_id),
+            self._make_availability_callback(physical_id),
             EventType.NODE_UPDATED,
             node.node_id,
         )
 
-    def _make_callback(self, device_id: UUID, parameter_id: UUID, cluster_id: int, attribute_id: int):
+    def _make_callback(self, physical_id: UUID, parameter_id: UUID, cluster_id: int, attribute_id: int):
         def callback(event_type, new_value):
             event = DeviceParameterChange(
-                device_id=device_id,
+                physical_id=physical_id,
                 parameter_id=parameter_id,
                 value=self._mapper.attribute_value(
                     cluster_id, attribute_id, self._mapper.parse_raw_attribute(cluster_id, attribute_id, new_value)
@@ -830,17 +832,17 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
 
         return callback
 
-    def _make_availability_callback(self, device_id: UUID):
+    def _make_availability_callback(self, physical_id: UUID):
         def callback(event_type, updated_node: MatterNode):
-            was_available = self._node_availability.get(device_id)
+            was_available = self._node_availability.get(physical_id)
             is_available = updated_node.available
             if is_available == was_available:
                 return
-            self._node_availability[device_id] = is_available
+            self._node_availability[physical_id] = is_available
             if is_available:
-                self._spawn(self.output.controller_did_connect_device(self, device_id))
+                self._spawn(self.output.controller_did_connect_device(self, physical_id))
             else:
-                self._spawn(self.output.controller_did_lose_device(self, device_id))
+                self._spawn(self.output.controller_did_lose_device(self, physical_id))
 
         return callback
 
@@ -864,7 +866,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         return node
 
     async def _execute_cluster_command(
-        self, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
+        self, device: MatterDevice, node, endpoint_id: int, cluster, parameter: MatterParameter, command: DeviceCommand
     ):
         command_id = parameter.integration_data.command_id
         if command_id is None or command_id < 0:
@@ -890,7 +892,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
             time_requested_timeout = 1000 if cmd_class.must_use_timed_invoke else None
             if isinstance(arguments, dict):
                 arguments = self._mapper.arguments_by_name(
-                    command.device_id, endpoint_id, cluster.id, command_id, cmd_class, arguments
+                    device.physical_id, endpoint_id, cluster.id, command_id, cmd_class, arguments
                 )
                 data = self._mapper.parse_data_for_command(cmd_class, arguments)
                 await self._require_matter_client().send_device_command(
@@ -965,7 +967,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         await self._require_matter_client().write_attribute(node.node_id, attribute_path, value)
 
     def _get_main_parameter(
-        self, device_id: UUID, node: MatterNode, parameters: list[ParameterState[MatterParameterIntegrationData]]
+        self, physical_id: UUID, node: MatterNode, parameters: list[ParameterState[MatterParameterIntegrationData]]
     ) -> tuple[ParameterState[MatterParameterIntegrationData] | None, DefaultParams]:
         # Only `user` parameters can be main (see can_be_main_parameter, which also needs the
         # default_value set from these defaults) — skip hidden ones so they don't shadow a later match.
@@ -987,11 +989,13 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                             not accepted_command_ids or set(needed_command_ids) <= set(accepted_command_ids)
                         )
                         parameter_id = self._mapper.attribute_parameter_uuid(
-                            device_id, endpoint_id, cluster_id, spec_id
+                            physical_id, endpoint_id, cluster_id, spec_id
                         )
                     else:
                         supported = not accepted_command_ids or spec_id in accepted_command_ids
-                        parameter_id = self._mapper.command_parameter_uuid(device_id, endpoint_id, cluster_id, spec_id)
+                        parameter_id = self._mapper.command_parameter_uuid(
+                            physical_id, endpoint_id, cluster_id, spec_id
+                        )
                     if supported and parameter_id in candidates:
                         return candidates[parameter_id], spec.default_params
                     spec = spec.fallback

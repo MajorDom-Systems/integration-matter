@@ -74,7 +74,7 @@ async def _pair(
     )
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(state)
-        device = await repo.get(state.id, as_=MatterDevice)
+        device = await repo.get(state.physical_id, as_=MatterDevice)
     assert device is not None
     await controller.fetch(device)  # the Hub's last step: it follows the device
     return controller, fake, device, state

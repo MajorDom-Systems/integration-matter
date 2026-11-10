@@ -55,8 +55,8 @@ async def test_pairs_a_discovered_device(matter):
 
     draft = await _pair_draft(controller, repository, discovery)
 
-    # the draft comes back under the real device id (derived from the commissioned node)
-    device_id = draft.id
+    # the draft comes back under the real physical id (derived from the commissioned node)
+    device_id = draft.physical_id
     assert device_id != discovery.id
     async with repository.session() as repo:
         device = await repo.get(device_id, as_=MatterDevice)
@@ -74,7 +74,7 @@ async def test_unpairs_a_device(matter):
     draft = await _pair_draft(controller, repository, discovery)
 
     async with repository.session() as repo:
-        device = await repo.get(draft.id, as_=MatterDevice)
+        device = await repo.get(draft.physical_id, as_=MatterDevice)
     assert device is not None
     await controller.unpair(device)  # removes the node from the fabric without error
 
@@ -86,7 +86,7 @@ async def _pair(controller, output, repository):
     discovery = next(iter(controller.discoveries.values()))
     draft = await _pair_draft(controller, repository, discovery)
     async with repository.session() as repo:
-        return await repo.get(draft.id, as_=MatterDevice)
+        return await repo.get(draft.physical_id, as_=MatterDevice)
 
 
 async def test_fetch_emits_events(matter):
@@ -123,7 +123,7 @@ async def test_commissions_every_device_type(matter):
     discovery = next(iter(controller.discoveries.values()))
     draft = await _pair_draft(controller, repository, discovery)
 
-    device_id = draft.id
+    device_id = draft.physical_id
     async with repository.session() as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id)

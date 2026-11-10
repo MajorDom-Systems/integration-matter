@@ -73,7 +73,7 @@ async def _commission(controller) -> UUID:
     await _wait(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
     draft = await _pair(controller, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    return draft.id
+    return draft.physical_id
 
 
 async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials | None) -> MatterDeviceState:
@@ -82,7 +82,7 @@ async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentia
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(draft)
     if draft.available:
-        await controller.output.controller_did_connect_device(controller, draft.id)
+        await controller.output.controller_did_connect_device(controller, draft.physical_id)
     await controller.fetch(draft)
     return draft
 
@@ -136,7 +136,7 @@ async def test_attribute_update_becomes_an_event(controller):
     await _wait(lambda: len(output.events) > before)
 
     event = output.events[-1]
-    assert event.device_id == device_id
+    assert event.physical_id == device_id
 
 
 async def test_unpair_removes_the_node(controller):
@@ -576,6 +576,7 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
         await repo.save(
             MatterDeviceState(
                 id=UUID(int=7),
+                physical_id=UUID(int=70),
                 name="Bulb",
                 room_id=UUID(int=1),
                 transport="BLE",
@@ -586,7 +587,7 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
             )
         )
     await controller.start()
-    assert cast(RecordingControllerOutput, controller.output).lost_devices == [UUID(int=7)]  # the app hears it too
+    assert cast(RecordingControllerOutput, controller.output).lost_devices == [UUID(int=70)]  # the app hears it too
     await controller.stop()
 
 
@@ -613,6 +614,7 @@ async def test_a_device_that_never_finished_commissioning_unpairs(controller):
     controller, _ = controller
     device = MatterDevice(
         id=UUID(int=8),
+        physical_id=UUID(int=80),
         name="Bulb",
         room_id=UUID(int=1),
         transport="BLE",
@@ -912,7 +914,7 @@ async def test_a_reconnect_that_breaks_reports_matter_crashed(controller):
     await _commission(ctrl)
 
     class Locked(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, device_id: UUID):
+        async def controller_did_lose_device(self, controller: AbstractController, physical_id: UUID):
             raise RuntimeError("database is locked")  # the Hub's
 
     output = ctrl.output = Locked()
@@ -951,7 +953,7 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     is_reporting = asyncio.Event()
 
     class Slow(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, device_id: UUID):
+        async def controller_did_lose_device(self, controller: AbstractController, physical_id: UUID):
             is_reporting.set()
             await asyncio.sleep(0.1)  # the Hub's write and send
 
@@ -960,7 +962,7 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     lost.lose_server()
     await asyncio.wait_for(is_reporting.wait(), 1)
     draft = await ctrl.pair_device(discovery, draft_for(discovery), None)  # quick: nothing to commission
-    assert draft.id == second_id
+    assert draft.physical_id == second_id
     lost.server.restore()
     await _wait(lambda: set(output.connected_devices) == {first} and ctrl._matter_client is not lost)
     assert output.error_log == []
@@ -1097,11 +1099,11 @@ async def test_a_pairing_reports_and_saves_nothing_it_is_the_hubs_to_do(controll
         discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
     )
     node = cast(FakeMatterClient, ctrl._matter_client).get_node(FAKE_NODE_ID)
-    assert draft.id == ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
+    assert draft.physical_id == ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
     assert draft.integration_data.node_id == FAKE_NODE_ID and draft.parameters and draft.available
     assert output.connected_devices == [] and output.events == []
     async with ctrl.platform.device_repository(ctrl) as repo:
-        assert await repo.get(draft.id) is None
+        assert await repo.get(draft.physical_id) is None
 
 
 async def test_a_failure_after_the_commissioning_leaves_the_node_on_the_fabric_to_retry(controller, monkeypatch):
@@ -1137,10 +1139,10 @@ async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node
     )
     # the Hub refused the id or failed to save: nothing saved, nothing undone
 
-    assert ctrl.discoveries.keys() == {first.id}
-    again = await _pair(ctrl, ctrl.discoveries[first.id], None)
+    assert ctrl.discoveries.keys() == {first.physical_id}
+    again = await _pair(ctrl, ctrl.discoveries[first.physical_id], None)
 
-    assert again.id == first.id and again.integration_data.node_id == FAKE_NODE_ID
+    assert again.physical_id == first.physical_id and again.integration_data.node_id == FAKE_NODE_ID
     assert ctrl.discoveries == {}  # saved and fetched: offered no more
     assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
 
@@ -1151,13 +1153,22 @@ async def test_an_id_another_record_holds_is_refused_before_anything_is_mapped(c
     (commissionable,) = ctrl.discoveries.values()
     node = load_on_off_light_node()
     taken = ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
-    ctrl.platform = build_test_platform(store={taken: {"name": "Old bulb", "is_paired": False}})
+    holder = uuid4()
+    ctrl.platform = build_test_platform(
+        store={holder: {"name": "Old bulb", "is_paired": False, "physical_id": str(taken)}}
+    )
 
     draft = draft_for(commissionable)
+    draft_id = draft.id
     with pytest.raises(DeviceIdTakenError) as refusal:
         await ctrl.pair_device(commissionable, draft, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    assert (refusal.value.device_id, refusal.value.name, refusal.value.is_paired) == (taken, "Old bulb", False)
-    assert draft.id == commissionable.id and draft.parameters == []
+    assert (refusal.value.physical_id, refusal.value.device_id, refusal.value.name, refusal.value.is_paired) == (
+        taken,
+        holder,
+        "Old bulb",
+        False,
+    )
+    assert draft.id == draft_id and draft.parameters == []
     # on the fabric now, no longer commissionable: offered as it is, for the user to merge into the record
     (offered,) = ctrl.discoveries.values()
     assert offered.id == taken and offered.expected_credentials_options == [CredentialsType.none]
@@ -1170,14 +1181,20 @@ async def test_the_record_the_user_picked_takes_the_node_in_place_of_its_old_one
     (commissionable,) = ctrl.discoveries.values()
     node = load_on_off_light_node()
     taken = ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
-    ctrl.platform = build_test_platform(store={taken: {"name": "Old bulb"}})
+    holder = uuid4()
+    ctrl.platform = build_test_platform(store={holder: {"name": "Old bulb", "physical_id": str(taken)}})
 
-    picked = draft_for(commissionable).model_copy(update={"id": taken, "name": "Old bulb"})
+    picked = draft_for(commissionable).model_copy(update={"id": holder, "physical_id": taken, "name": "Old bulb"})
     picked.integration_data.node_id = 7  # the node it had before a factory reset
     draft = await ctrl.pair_device(
         commissionable, picked, ProvidedCredentials(type=CredentialsType.code, value="20202021")
     )
-    assert (draft.id, draft.name, draft.integration_data.node_id) == (taken, "Old bulb", FAKE_NODE_ID)
+    assert (draft.id, draft.physical_id, draft.name, draft.integration_data.node_id) == (
+        holder,
+        taken,
+        "Old bulb",
+        FAKE_NODE_ID,
+    )
 
 
 async def test_fetch_follows_the_device_once_however_often_it_runs(controller):

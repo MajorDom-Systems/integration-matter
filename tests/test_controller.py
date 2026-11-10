@@ -14,7 +14,6 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("MATTER_INTEGRATION_TESTS") != "1",
     reason="needs matter-server + x86-64 MVD binaries — run via docker/ (plan §3.5)",
 )
-from uuid import UUID
 
 from majordom_integration_sdk.schemas.device import CredentialsType, ProvidedCredentials
 
@@ -34,23 +33,17 @@ async def test_discovers_a_matter_device(matter):
     assert discovery.transport == "IP"
 
 
-async def _provisional(repository, discovery):
-    from majordom_matter.model import MatterDeviceIntegrationData, MatterDeviceState
+async def _pair_draft(controller, repository, discovery):
+    """The Hub's side: the draft in, the filled one saved, the device followed."""
+    from majordom_matter.testing import draft_for
 
-    # node_id gets its real value during commissioning; the Hub seeds the row first.
+    draft = await controller.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
     async with repository.session() as repo:
-        await repo.save(
-            MatterDeviceState(
-                id=discovery.id,
-                name="Test Device",
-                room_id=UUID(int=1),
-                transport="IP",
-                integration="matter",
-                manufacturer=None,
-                parameters=[],
-                integration_data=MatterDeviceIntegrationData(node_id=0),
-            )
-        )
+        await repo.save(draft)
+    await controller.fetch(draft)
+    return draft
 
 
 async def test_pairs_a_discovered_device(matter):
@@ -59,14 +52,12 @@ async def test_pairs_a_discovered_device(matter):
     controller, output, repository, _mvd = matter
     await _wait_for(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
-    await _provisional(repository, discovery)
 
-    await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    draft = await _pair_draft(controller, repository, discovery)
 
-    # pairing renames the row from the provisional discovery id to the real device id (derived
-    # from the commissioned node), and reports the connect under that id.
-    assert output.connected_devices, "controller should report the connect"
-    device_id = output.connected_devices[-1]
+    # the draft comes back under the real device id (derived from the commissioned node)
+    device_id = draft.id
+    assert device_id != discovery.id
     async with repository.session() as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id)
@@ -80,12 +71,10 @@ async def test_unpairs_a_device(matter):
     controller, output, repository, _mvd = matter
     await _wait_for(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
-    await _provisional(repository, discovery)
-    await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    draft = await _pair_draft(controller, repository, discovery)
 
-    device_id = output.connected_devices[-1]
     async with repository.session() as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(draft.id, as_=MatterDevice)
     assert device is not None
     await controller.unpair(device)  # removes the node from the fabric without error
 
@@ -95,11 +84,9 @@ async def _pair(controller, output, repository):
 
     await _wait_for(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
-    await _provisional(repository, discovery)
-    await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    device_id = output.connected_devices[-1]
+    draft = await _pair_draft(controller, repository, discovery)
     async with repository.session() as repo:
-        return await repo.get(device_id, as_=MatterDevice)
+        return await repo.get(draft.id, as_=MatterDevice)
 
 
 async def test_fetch_emits_events(matter):
@@ -134,11 +121,9 @@ async def test_commissions_every_device_type(matter):
     controller, output, repository, _mvd = matter
     await _wait_for(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
-    await _provisional(repository, discovery)
-    await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    draft = await _pair_draft(controller, repository, discovery)
 
-    assert output.connected_devices, "controller should report the connect"
-    device_id = output.connected_devices[-1]
+    device_id = draft.id
     async with repository.session() as repo:
         device = await repo.get(device_id, as_=MatterDevice)
         state = await repo.state(device_id)

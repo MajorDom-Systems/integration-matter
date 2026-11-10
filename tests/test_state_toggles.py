@@ -8,7 +8,6 @@ endpoint, so that cluster's main parameter wins. A tap is simulated the way the 
 import asyncio
 import json
 from typing import Any
-from uuid import UUID
 
 import pytest
 from chip.clusters.Objects import (
@@ -32,8 +31,8 @@ from matter_server.common.models import MatterNodeData
 
 from majordom_matter import MatterController
 from majordom_matter.exceptions import MatterUnexpectedError
-from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
-from majordom_matter.testing import _FIXTURE, FakeMatterClient
+from majordom_matter.model import MatterDevice, MatterDeviceState, MatterParameterTypeEnum
+from majordom_matter.testing import _FIXTURE, FakeMatterClient, draft_for
 
 ENDPOINT = 13
 
@@ -64,31 +63,20 @@ async def _pair(
     monkeypatch.setattr("majordom_matter.controller.MatterClient", lambda url, session: fake)
     controller = MatterController(build_test_platform())
     controller.peripherals = SERVER
-    output = controller.output = RecordingControllerOutput()
+    controller.output = RecordingControllerOutput()
     await controller.start()
     async with asyncio.timeout(5):
         while not controller.discoveries:
             await asyncio.sleep(0.02)
     discovery = next(iter(controller.discoveries.values()))
+    state = await controller.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
     async with controller.platform.device_repository(controller) as repo:
-        await repo.save(
-            MatterDeviceState(
-                id=discovery.id,
-                name="Test",
-                room_id=UUID(int=1),
-                transport="IP",
-                integration="matter",
-                manufacturer=None,
-                parameters=[],
-                integration_data=MatterDeviceIntegrationData(node_id=0),
-            )
-        )
-    await controller.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    device_id = output.connected_devices[-1]
-    async with controller.platform.device_repository(controller) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
-    assert device is not None and state is not None
+        await repo.save(state)
+        device = await repo.get(state.id, as_=MatterDevice)
+    assert device is not None
+    await controller.fetch(device)  # the Hub's last step: it follows the device
     return controller, fake, device, state
 
 

@@ -561,6 +561,15 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         client = self._require_matter_client()
         self._subscribed.pop(device.physical_id, None)
         self._node_availability.pop(device.physical_id, None)
+        if device.node_id in self._unsaved_pairings:
+            # The Hub's rollback of a pairing it didn't save: the node stays on the fabric, offered at once to retry
+            self._cancel_unsaved_pairing(device.node_id)
+            for node in client.get_nodes():
+                if node.node_id == device.node_id:
+                    await self._offer_fabric_node(node)
+            return
+        if self._fabric_discovery_id(device.node_id) in self._majordom_descoveries:
+            return  # rolled back already: offered as its fabric node, not a device to remove
         # a device that never finished commissioning (or that matterjs-server lost) has no node to remove
         if any(node.node_id == device.node_id for node in client.get_nodes()):
             with _server_call("the unpairing"):

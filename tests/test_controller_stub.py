@@ -1163,6 +1163,24 @@ async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node
     assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
 
 
+async def test_a_rolled_back_pairing_is_offered_again_at_once_as_its_fabric_node(controller):
+    ctrl, _ = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    first = await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+
+    await ctrl.unpair(MatterDevice.model_validate(first.model_dump()))  # the Hub failed to save it
+    await ctrl.unpair(MatterDevice.model_validate(first.model_dump()))  # and again: nothing more
+
+    fabric_id = ctrl._fabric_discovery_id(FAKE_NODE_ID)
+    assert fabric_id in ctrl.discoveries and not ctrl._unsaved_pairings
+    assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
+    again = await _pair(ctrl, ctrl.discoveries[fabric_id], None)
+    assert again.physical_id == first.physical_id
+
+
 async def test_a_fetch_of_the_paired_node_means_the_hub_saved_it(controller, monkeypatch):
     ctrl, _ = controller
     monkeypatch.setattr("majordom_matter.controller.UNSAVED_PAIRING_TIMEOUT", 0.05)

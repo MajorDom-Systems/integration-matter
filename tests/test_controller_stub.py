@@ -84,7 +84,7 @@ async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentia
     async with controller.platform.device_repository(controller) as repo:
         await repo.save(draft)
     if draft.available:
-        await controller.output.controller_did_connect_device(controller, draft.physical_id)
+        await controller.output.controller_did_connect_device(controller, physical_id=draft.physical_id)
     await controller.fetch(draft)
     return draft
 
@@ -917,7 +917,7 @@ async def test_a_reconnect_that_breaks_reports_matter_crashed(controller):
     await _commission(ctrl)
 
     class Locked(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, physical_id: UUID):
+        async def controller_did_lose_device(self, controller: AbstractController, *, physical_id: UUID):
             raise RuntimeError("database is locked")  # the Hub's
 
     output = ctrl.output = Locked()
@@ -956,7 +956,7 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     is_reporting = asyncio.Event()
 
     class Slow(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, physical_id: UUID):
+        async def controller_did_lose_device(self, controller: AbstractController, *, physical_id: UUID):
             is_reporting.set()
             await asyncio.sleep(0.1)  # the Hub's write and send
 

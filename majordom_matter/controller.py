@@ -190,7 +190,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 self._subscription(device.physical_id, node)
                 device_nodes.append(device.integration_data.node_id)
             else:  # gone from the fabric: a commissioning that failed, a reset matterjs-server
-                await self.output.controller_did_lose_device(self, device.physical_id)
+                await self.output.controller_did_lose_device(self, physical_id=device.physical_id)
 
         for node in client.get_nodes():
             if node.node_id not in device_nodes:
@@ -198,7 +198,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
         # the Hub, or a lost server, made them unavailable; a copy: a pairing may land meanwhile
         for physical_id, available in list(self._node_availability.items()):
             if available:
-                await self.output.controller_did_connect_device(self, physical_id)
+                await self.output.controller_did_connect_device(self, physical_id=physical_id)
 
     async def _offer_fabric_node(self, node: MatterNode):
         """A node on the fabric without a device: pair_device adds it as it is, without a code."""
@@ -349,7 +349,7 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                     outage_since, delay = failed_at, self._RECONNECT_DELAY  # a new outage, else its delay grows on
                 for physical_id, available in list(self._node_availability.items()):  # a pairing may land meanwhile
                     if available:
-                        await self.output.controller_did_lose_device(self, physical_id)
+                        await self.output.controller_did_lose_device(self, physical_id=physical_id)
                 self._node_availability = dict.fromkeys(self._node_availability, False)
 
                 is_reported = False
@@ -869,9 +869,9 @@ class MatterController(AbstractController[MatterDevice, MatterParameter, NoSetti
                 return
             self._node_availability[physical_id] = is_available
             if is_available:
-                self._spawn(self.output.controller_did_connect_device(self, physical_id))
+                self._spawn(self.output.controller_did_connect_device(self, physical_id=physical_id))
             else:
-                self._spawn(self.output.controller_did_lose_device(self, physical_id))
+                self._spawn(self.output.controller_did_lose_device(self, physical_id=physical_id))
 
         return callback
 

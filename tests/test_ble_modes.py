@@ -189,10 +189,10 @@ async def matterjs_server(tmp_path: Path, *, is_router_disabled: bool) -> tuple[
 async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_off_the_system_bus(tmp_path, fake_server):
     service, matter = await matterjs_server(tmp_path, is_router_disabled=False)
     environment = service["environment"]
-    assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
+    assert (environment.get("BLE_PROXY"), environment.get("BLUETOOTH_ADAPTER"), environment.get("NOBLE_BINDINGS")) == (
         "true",
-        "",
-        "",
+        None,  # empty: left out
+        None,
     )
     assert service["volumes"] == [f"{tmp_path}/peripherals/matterjs-server:/data"]
     assert matter.params["adapter"] == ""
@@ -201,8 +201,8 @@ async def test_through_the_router_matterjs_server_proxies_bluetooth_and_stays_of
 async def test_without_the_router_matterjs_server_drives_an_adapter_through_bluez(tmp_path, fake_server):
     service, matter = await matterjs_server(tmp_path, is_router_disabled=True)
     environment = service["environment"]
-    assert (environment["BLE_PROXY"], environment["BLUETOOTH_ADAPTER"], environment["NOBLE_BINDINGS"]) == (
-        "",
+    assert (environment.get("BLE_PROXY"), environment.get("BLUETOOTH_ADAPTER"), environment.get("NOBLE_BINDINGS")) == (
+        None,
         "0",
         "dbus",
     )

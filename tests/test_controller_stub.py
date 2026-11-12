@@ -7,6 +7,8 @@ in the dockerized MVD suite, test_controller.py.
 """
 
 import asyncio
+import base64
+import hashlib
 import logging
 from dataclasses import replace
 from functools import partial
@@ -18,6 +20,7 @@ import pytest
 import pytest_asyncio
 from majordom_integration_sdk import (
     AbstractController,
+    DeviceIdTakenError,
     Endpoint,
     IntegrationError,
     Peripherals,
@@ -27,7 +30,7 @@ from majordom_integration_sdk import (
 from majordom_integration_sdk.schemas.command import DeviceCommand
 from majordom_integration_sdk.schemas.device import CredentialsOption, CredentialsType, Discovery, ProvidedCredentials
 from majordom_integration_sdk.testing import RecordingControllerOutput, build_test_platform
-from matter_server.client.exceptions import CannotConnect
+from matter_server.client.exceptions import CannotConnect, InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import UnknownError
 
@@ -35,7 +38,7 @@ from majordom_matter import MatterController
 from majordom_matter.exceptions import MatterConnectionError, MatterUnexpectedError
 from majordom_matter.mapper import MatterMapper
 from majordom_matter.model import MatterDevice, MatterDeviceIntegrationData, MatterDeviceState, MatterParameterTypeEnum
-from majordom_matter.testing import FakeMatterClient, FakeMatterServer, load_on_off_light_node
+from majordom_matter.testing import FakeMatterClient, FakeMatterServer, draft_for, load_on_off_light_node
 
 FAKE_NODE_ID = 46  # matches fixtures/on_off_light_node.json
 
@@ -68,28 +71,22 @@ async def _wait(predicate, timeout: float = 5.0):
 
 
 async def _commission(controller) -> UUID:
-    """Seed the provisional row the Hub would create, then pair — returns the real device id."""
+    """Pair as the Hub does: returns the real device id."""
     await _wait(lambda: bool(controller.discoveries))
     discovery = next(iter(controller.discoveries.values()))
-    await _pair(controller, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    return controller.output.connected_devices[-1]
+    draft = await _pair(controller, discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    return draft.physical_id
 
 
-async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials | None):
+async def _pair(controller, discovery: Discovery, credentials: ProvidedCredentials | None) -> MatterDeviceState:
+    """The Hub's side of a pairing: the draft goes in, then it saves what comes back, connects and fetches."""
+    draft = await controller.pair_device(discovery, draft_for(discovery), credentials)
     async with controller.platform.device_repository(controller) as repo:
-        await repo.save(
-            MatterDeviceState(
-                id=discovery.id,
-                name="Test",
-                room_id=UUID(int=1),
-                transport="IP",
-                integration="matter",
-                manufacturer=None,
-                parameters=[],
-                integration_data=MatterDeviceIntegrationData(node_id=0),
-            )
-        )
-    await controller.pair_device(discovery, credentials)
+        await repo.save(draft)
+    if draft.available:
+        await controller.output.controller_did_connect_device(controller, physical_id=draft.physical_id)
+    await controller.fetch(draft)
+    return draft
 
 
 async def test_discovers_the_canned_node(controller):
@@ -107,8 +104,8 @@ async def test_pairs_and_maps_parameters(controller):
 
     assert output.connected_devices == [device_id]
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id)
     assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
     # The on-off-light exposes the OnOff cluster (endpoint 13) → at least a toggle command maps.
     assert state is not None and len(state.parameters) > 0
@@ -118,8 +115,8 @@ async def test_send_command_reaches_the_client(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
 
     command_param = next(p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command)
     await ctrl.send_command(
@@ -141,14 +138,14 @@ async def test_attribute_update_becomes_an_event(controller):
     await _wait(lambda: len(output.events) > before)
 
     event = output.events[-1]
-    assert event.device_id == device_id
+    assert event.physical_id == device_id
 
 
 async def test_unpair_removes_the_node(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     await ctrl.unpair(device)
     assert FAKE_NODE_ID in ctrl._matter_client.removed_nodes
@@ -158,7 +155,7 @@ async def test_fetch_emits_events(controller):
     ctrl, output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     before = len(output.events)
     await ctrl.fetch(device)
@@ -171,7 +168,7 @@ async def test_identify_sends_identify_command(controller):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     await ctrl.identify(device)
     # The on-off-light carries the Identify cluster (3) on its application endpoint.
@@ -195,8 +192,8 @@ async def _move_to_level_parameter(ctrl, device_id: UUID):
     from chip.clusters.Objects import LevelControl
 
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     param_id = ctrl._mapper.command_parameter_uuid(
         device_id, 13, LevelControl.id, LevelControl.Commands.MoveToLevel.command_id
     )
@@ -372,8 +369,8 @@ async def test_timed_invoke_follows_the_command(controller, monkeypatch):
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     timeouts: list[int | None] = []
 
     async def send_device_command(node_id, endpoint_id, command, timed_request_timeout_ms=None, **kwargs):
@@ -405,7 +402,7 @@ async def test_hidden_main_candidate_does_not_block_a_visible_one(controller, mo
     ctrl, _output = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        state = await repo.state(device_id, MatterDeviceState)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     assert state.main_parameter == ctrl._mapper.command_parameter_uuid(device_id, 13, OnOff.id, 0x02)
     assert state.can_set_main_parameter(state.main_parameter)
 
@@ -415,8 +412,9 @@ async def test_fetch_normalizes_values_like_the_subscription(controller):
 
     ctrl, output = controller
     device_id = await _commission(ctrl)
+    output.events.clear()  # the pairing's fetch
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
     last_network_id = ctrl._mapper.attribute_parameter_uuid(device_id, 0, NetworkCommissioning.id, 0x06)
     server_list = ctrl._mapper.attribute_parameter_uuid(device_id, 0, Descriptor.id, 0x01)
     capability_minima = ctrl._mapper.attribute_parameter_uuid(device_id, 0, BasicInformation.id, 0x13)
@@ -439,8 +437,9 @@ async def test_subscription_parses_raw_json_like_fetch(controller):
 
     ctrl, output = controller
     device_id = await _commission(ctrl)
+    output.events.clear()  # the pairing's fetch
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
 
     def subscribed(parameter_id: UUID):
         return next((e.value for e in reversed(output.events) if e.parameter_id == parameter_id), None)
@@ -579,6 +578,7 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
         await repo.save(
             MatterDeviceState(
                 id=UUID(int=7),
+                physical_id=UUID(int=70),
                 name="Bulb",
                 room_id=UUID(int=1),
                 transport="BLE",
@@ -589,7 +589,7 @@ async def test_a_device_whose_node_is_gone_doesnt_stop_matter_from_starting(monk
             )
         )
     await controller.start()
-    assert cast(RecordingControllerOutput, controller.output).lost_devices == [UUID(int=7)]  # the app hears it too
+    assert cast(RecordingControllerOutput, controller.output).lost_devices == [UUID(int=70)]  # the app hears it too
     await controller.stop()
 
 
@@ -603,11 +603,12 @@ async def test_a_node_on_the_fabric_without_a_device_is_added_as_it_is(monkeypat
     (discovery,) = controller.discoveries.values()
     assert discovery.expected_credentials_options == [CredentialsType.none]
 
-    await _pair(controller, discovery, credentials)
+    paired = await _pair(controller, discovery, credentials)
     async with controller.platform.device_repository(controller) as repo:
-        device = await repo.get(discovery.id, as_=MatterDevice)
+        device = await repo.get(physical_id=paired.physical_id, as_=MatterDevice)
     assert device is not None and device.integration_data.node_id == FAKE_NODE_ID
-    assert cast(RecordingControllerOutput, controller.output).connected_devices == [discovery.id]
+    assert paired.physical_id != discovery.id
+    assert cast(RecordingControllerOutput, controller.output).connected_devices == [paired.physical_id]
     assert controller.discoveries == {}
     await controller.stop()
 
@@ -616,6 +617,7 @@ async def test_a_device_that_never_finished_commissioning_unpairs(controller):
     controller, _ = controller
     device = MatterDevice(
         id=UUID(int=8),
+        physical_id=UUID(int=80),
         name="Bulb",
         room_id=UUID(int=1),
         transport="BLE",
@@ -905,7 +907,9 @@ async def test_a_stopped_matter_says_it_isnt_started(controller):
     discovery = next(iter(ctrl.discoveries.values()))
     await ctrl.stop()
     with pytest.raises(MatterConnectionError):
-        await ctrl.pair_device(discovery, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+        await ctrl.pair_device(
+            discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+        )
 
 
 async def test_a_reconnect_that_breaks_reports_matter_crashed(controller):
@@ -913,7 +917,9 @@ async def test_a_reconnect_that_breaks_reports_matter_crashed(controller):
     await _commission(ctrl)
 
     class Locked(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, device_id: UUID):
+        async def controller_did_lose_device(
+            self, controller: AbstractController, *, physical_id: UUID | None = None, device_id: UUID | None = None
+        ):
             raise RuntimeError("database is locked")  # the Hub's
 
     output = ctrl.output = Locked()
@@ -939,11 +945,11 @@ async def test_a_failure_other_than_an_outage_on_reconnect_reports_matter_crashe
 async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_reconnecting(controller, monkeypatch):
     ctrl, output = controller
     first = await _commission(ctrl)
-    second = load_on_off_light_node()
+    second = load_on_off_light_node({"0/40/15": "OTHER_SN"})
     second.node_data.node_id = FAKE_NODE_ID + 1  # on the fabric without a device: added as it is
     on_fabric = FakeMatterClient.get_nodes
     monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), second])
-    second_id = ctrl._mapper.device_uuid(second.node_id, second.device_info.productName)
+    second_id = ctrl._fabric_discovery_id(second.node_id)
     discovery = output.received_discoveries[0].model_copy(
         update={"id": second_id, "expected_credentials_options": [CredentialsType.none]}
     )
@@ -952,7 +958,9 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     is_reporting = asyncio.Event()
 
     class Slow(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, device_id: UUID):
+        async def controller_did_lose_device(
+            self, controller: AbstractController, *, physical_id: UUID | None = None, device_id: UUID | None = None
+        ):
             is_reporting.set()
             await asyncio.sleep(0.1)  # the Hub's write and send
 
@@ -960,9 +968,10 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     lost = cast(FakeMatterClient, ctrl._matter_client)
     lost.lose_server()
     await asyncio.wait_for(is_reporting.wait(), 1)
-    await _pair(ctrl, discovery, None)  # quick: nothing to commission
+    draft = await ctrl.pair_device(discovery, draft_for(discovery), None)  # quick: nothing to commission
+    assert draft.physical_id == ctrl._node_device_id(second)
     lost.server.restore()
-    await _wait(lambda: set(output.connected_devices) == {first, discovery.id} and ctrl._matter_client is not lost)
+    await _wait(lambda: set(output.connected_devices) == {first} and ctrl._matter_client is not lost)
     assert output.error_log == []
 
 
@@ -1001,8 +1010,8 @@ async def test_a_call_cut_short_by_a_lost_matterjs_server_says_why(controller, c
     ctrl, _ = controller
     device_id = await _commission(ctrl)
     async with ctrl.platform.device_repository(ctrl) as repo:
-        device = await repo.get(device_id, as_=MatterDevice)
-        state = await repo.state(device_id, MatterDeviceState)
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+        state = await repo.state(physical_id=device_id, as_=MatterDeviceState)
     toggle = next(p for p in state.parameters if p.integration_data.type is MatterParameterTypeEnum.command)
     command = DeviceCommand(device_id=device_id, parameter_id=toggle.id, value=None)
     calls = {
@@ -1089,22 +1098,181 @@ async def test_a_node_matterjs_server_hasnt_interviewed_doesnt_stop_a_pairing(co
     assert output.connected_devices
 
 
-async def test_a_node_a_failed_pairing_commissioned_is_offered_as_it_is_at_once(controller, monkeypatch):
+async def test_a_pairing_reports_and_saves_nothing_it_is_the_hubs_to_do(controller):
+    ctrl, output = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    draft = await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+    node = cast(FakeMatterClient, ctrl._matter_client).get_node(FAKE_NODE_ID)
+    assert draft.physical_id == ctrl._node_device_id(node)
+    assert draft.integration_data.node_id == FAKE_NODE_ID and draft.parameters and draft.available
+    assert output.connected_devices == [] and output.events == []
+    async with ctrl.platform.device_repository(ctrl) as repo:
+        assert await repo.get(physical_id=draft.physical_id) is None
+
+
+async def test_a_failure_after_the_commissioning_leaves_the_node_on_the_fabric_to_retry(controller, monkeypatch):
+    ctrl, output = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+
+    def broken(*args: Any):
+        raise MatterUnexpectedError("mapping failed")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(MatterController, "_get_main_parameter", broken)
+        with pytest.raises(MatterUnexpectedError):
+            await ctrl.pair_device(
+                discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+            )
+
+    client = cast(FakeMatterClient, ctrl._matter_client)
+    assert client.removed_nodes == []  # nothing undone: the node stays on the fabric
+    (fabric,) = ctrl.discoveries.values()  # no longer commissionable: offered as it is
+    assert fabric.id != discovery.id and output.lost_discoveries == [discovery.id]
+    device = await _pair(ctrl, fabric, None)  # the retry, from a Hub-side clean state
+    assert device.integration_data.node_id == FAKE_NODE_ID and device.parameters
+    assert ctrl.discoveries == {} and client.removed_nodes == []
+
+
+async def test_a_paired_node_is_not_offered_while_the_hub_saves_it(controller):
+    ctrl, _ = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+    assert ctrl.discoveries == {}
+
+
+async def test_a_pairing_the_hub_never_saved_is_offered_again_as_its_fabric_node(controller, monkeypatch):
+    ctrl, output = controller
+    monkeypatch.setattr("majordom_matter.controller.UNSAVED_PAIRING_TIMEOUT", 0.05)
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    first = await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+    # the Hub refused the id or failed to save: nothing saved, nothing undone
+
+    fabric_id = ctrl._fabric_discovery_id(FAKE_NODE_ID)
+    await _wait(lambda: fabric_id in ctrl.discoveries)
+    assert fabric_id != first.physical_id
+    again = await _pair(ctrl, ctrl.discoveries[fabric_id], None)
+
+    assert again.physical_id == first.physical_id and again.integration_data.node_id == FAKE_NODE_ID
+    assert ctrl.discoveries == {}  # saved and fetched: offered no more
+    assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
+
+
+async def test_a_rolled_back_pairing_is_offered_again_at_once_as_its_fabric_node(controller):
+    ctrl, _ = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (discovery,) = ctrl.discoveries.values()
+    first = await ctrl.pair_device(
+        discovery, draft_for(discovery), ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+
+    await ctrl.unpair(MatterDevice.model_validate(first.model_dump()))  # the Hub failed to save it
+    await ctrl.unpair(MatterDevice.model_validate(first.model_dump()))  # and again: nothing more
+
+    fabric_id = ctrl._fabric_discovery_id(FAKE_NODE_ID)
+    assert fabric_id in ctrl.discoveries and not ctrl._unsaved_pairings
+    assert cast(FakeMatterClient, ctrl._matter_client).removed_nodes == []
+    again = await _pair(ctrl, ctrl.discoveries[fabric_id], None)
+    assert again.physical_id == first.physical_id
+
+
+async def test_a_fetch_of_the_paired_node_means_the_hub_saved_it(controller, monkeypatch):
+    ctrl, _ = controller
+    monkeypatch.setattr("majordom_matter.controller.UNSAVED_PAIRING_TIMEOUT", 0.05)
+    await _commission(ctrl)  # pairs and fetches
+    await asyncio.sleep(0.15)
+    assert ctrl.discoveries == {}
+
+
+async def test_an_id_another_record_holds_is_refused_before_anything_is_mapped(controller):
     ctrl, output = controller
     await _wait(lambda: bool(ctrl.discoveries))
     (commissionable,) = ctrl.discoveries.values()
+    node = load_on_off_light_node()
+    taken = ctrl._node_device_id(node)
+    holder = uuid4()
+    ctrl.platform = build_test_platform(
+        store={holder: {"name": "Old bulb", "is_paired": False, "physical_id": str(taken)}}
+    )
 
-    def broken(*args: Any):
-        raise MatterUnexpectedError("mapping failed")  # anything after the commissioning
-
-    monkeypatch.setattr(MatterController, "_get_main_parameter", broken)
-    with pytest.raises(MatterUnexpectedError):
-        await _pair(ctrl, commissionable, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
-    node = cast(FakeMatterClient, ctrl._matter_client).get_node(FAKE_NODE_ID)  # on the fabric now
+    draft = draft_for(commissionable)
+    draft_id = draft.id
+    with pytest.raises(DeviceIdTakenError) as refusal:
+        await ctrl.pair_device(commissionable, draft, ProvidedCredentials(type=CredentialsType.code, value="20202021"))
+    assert (refusal.value.physical_id, refusal.value.device_id, refusal.value.name, refusal.value.is_paired) == (
+        taken,
+        holder,
+        "Old bulb",
+        False,
+    )
+    assert draft.id == draft_id and draft.parameters == []
+    # on the fabric now, no longer commissionable: offered as it is, for the user to merge into the record
     (offered,) = ctrl.discoveries.values()
-    assert offered.id == ctrl._mapper.device_uuid(node.node_id, node.device_info.productName)
-    assert offered.expected_credentials_options == [CredentialsType.none]  # added without a code
-    assert output.lost_discoveries == [commissionable.id]  # no longer commissionable
+    assert offered.id == ctrl._fabric_discovery_id(FAKE_NODE_ID) and offered.expected_credentials_options == [
+        CredentialsType.none
+    ]
+    assert output.lost_discoveries == [commissionable.id]
+
+
+async def test_the_record_the_user_picked_takes_the_node_in_place_of_its_old_one(controller):
+    ctrl, _ = controller
+    await _wait(lambda: bool(ctrl.discoveries))
+    (commissionable,) = ctrl.discoveries.values()
+    node = load_on_off_light_node()
+    taken = ctrl._node_device_id(node)
+    holder = uuid4()
+    ctrl.platform = build_test_platform(store={holder: {"name": "Old bulb", "physical_id": str(taken)}})
+
+    picked = draft_for(commissionable).model_copy(update={"id": holder, "physical_id": taken, "name": "Old bulb"})
+    picked.integration_data.node_id = 7  # the node it had before a factory reset
+    draft = await ctrl.pair_device(
+        commissionable, picked, ProvidedCredentials(type=CredentialsType.code, value="20202021")
+    )
+    assert (draft.id, draft.physical_id, draft.name, draft.integration_data.node_id) == (
+        holder,
+        taken,
+        "Old bulb",
+        FAKE_NODE_ID,
+    )
+
+
+async def test_fetch_follows_the_device_once_however_often_it_runs(controller):
+    ctrl, output = controller
+    device_id = await _commission(ctrl)
+    async with ctrl.platform.device_repository(ctrl) as repo:
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+    client = cast(FakeMatterClient, ctrl._matter_client)
+    subscriptions = len(client._subscriptions)
+    assert subscriptions  # the first fetch subscribed
+
+    await ctrl.fetch(device)
+    await ctrl.fetch(device)
+    assert len(client._subscriptions) == subscriptions
+    output.events.clear()
+    client.fire_attribute_update("13/6/0", True)
+    await _wait(lambda: bool(output.events))
+    await asyncio.sleep(0.05)
+    assert len(output.events) == 1  # not once per fetch
+
+
+async def test_fetch_of_a_node_that_does_not_answer_is_not_a_failure(controller):
+    ctrl, output = controller
+    device_id = await _commission(ctrl)
+    async with ctrl.platform.device_repository(ctrl) as repo:
+        device = await repo.get(physical_id=device_id, as_=MatterDevice)
+    ctrl._matter_client.get_node(FAKE_NODE_ID).node_data.available = False
+    output.events.clear()
+    await ctrl.fetch(device)
+    assert output.events == []
 
 
 async def test_hand_overs_in_place_leave_no_ended_tasks_behind(controller):
@@ -1115,3 +1283,104 @@ async def test_hand_overs_in_place_leave_no_ended_tasks_behind(controller):
         assert await ctrl.platform_facts_did_change(before)
         await asyncio.sleep(0.02)
     assert len(ctrl._background_tasks) <= running + 1
+
+
+async def test_identity_is_the_serial_number_and_survives_a_new_node_id(controller):
+    ctrl, _ = controller
+    node = load_on_off_light_node()
+    before = ctrl._node_device_id(node)
+    node.node_data.node_id += 1
+    assert ctrl._node_device_id(node) == before
+
+
+async def test_identity_falls_back_to_unique_id_without_a_serial_number(controller):
+    ctrl, _ = controller
+    with_serial = ctrl._node_device_id(load_on_off_light_node())
+    by_unique_id = ctrl._node_device_id(load_on_off_light_node({"0/40/15": ""}))
+    assert by_unique_id is not None and by_unique_id != with_serial
+    assert ctrl._node_device_id(load_on_off_light_node({"0/40/15": "", "0/40/18": ""})) is None
+
+
+async def test_the_same_serial_from_two_vendors_gets_two_ids(controller):
+    ctrl, _ = controller
+    assert ctrl._node_device_id(load_on_off_light_node()) != ctrl._node_device_id(
+        load_on_off_light_node({"0/40/2": 4999})
+    )
+
+
+def _dac_node() -> MatterNode:
+    return load_on_off_light_node({"0/40/15": "", "0/40/18": ""})
+
+
+def _serve_dac(monkeypatch, ctrl, answers: list[Any]):
+    calls: list[Any] = []
+
+    async def send_device_command(node_id, endpoint_id, command, **kwargs):
+        calls.append((node_id, endpoint_id, command))
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return {"certificate": base64.b64encode(answer).decode()}
+
+    monkeypatch.setattr(ctrl._matter_client, "send_device_command", send_device_command)
+    monkeypatch.setattr("majordom_matter.controller._DAC_RETRY_DELAY", 0)
+    return calls
+
+
+async def test_the_attestation_certificate_is_read_only_without_a_serial_number_and_unique_id(controller, monkeypatch):
+    ctrl, _ = controller
+    calls = _serve_dac(monkeypatch, ctrl, [b"dac"])
+    with_serial = load_on_off_light_node()
+    assert await ctrl._resolve_node_device_id(with_serial) == ctrl._node_device_id(with_serial)
+    assert await ctrl._resolve_node_device_id(load_on_off_light_node({"0/40/15": ""})) is not None
+    assert calls == []
+    assert await ctrl._resolve_node_device_id(_dac_node()) == ctrl.device_uuid(hashlib.sha256(b"dac").digest())
+    assert len(calls) == 1 and calls[0][2].certificateType == 1
+
+
+async def test_the_same_attestation_certificate_gives_the_same_id(controller, monkeypatch):
+    ctrl, _ = controller
+    _serve_dac(monkeypatch, ctrl, [b"dac-a"])
+    first = await ctrl._resolve_node_device_id(_dac_node())
+    assert await ctrl._resolve_node_device_id(_dac_node()) == first
+    _serve_dac(monkeypatch, ctrl, [b"dac-b"])
+    other = _dac_node()
+    other.node_data.node_id += 1
+    assert await ctrl._resolve_node_device_id(other) != first
+
+
+async def test_a_dac_only_node_on_the_fabric_is_offered_after_a_restart_and_paired_by_its_node_id(
+    controller, monkeypatch
+):
+    ctrl, output = controller
+    node = _dac_node()
+    node.node_data.node_id = FAKE_NODE_ID + 1
+    on_fabric = FakeMatterClient.get_nodes
+    monkeypatch.setattr(FakeMatterClient, "get_nodes", lambda self: [*on_fabric(self), node])
+    calls = _serve_dac(monkeypatch, ctrl, [b"dac"])
+    ctrl.discoveries.clear()
+
+    await ctrl._sync_with_server()  # what a controller restart runs
+
+    offered = ctrl.discoveries[ctrl._fabric_discovery_id(node.node_id)]
+    assert calls == []  # offering needs no certificate
+    draft = await ctrl.pair_device(offered, draft_for(offered), None)
+    assert draft.physical_id == ctrl.device_uuid(hashlib.sha256(b"dac").digest())
+    assert draft.integration_data.node_id == node.node_id
+
+
+async def test_a_first_attestation_read_failing_is_retried_once(controller, monkeypatch):
+    ctrl, _ = controller
+    calls = _serve_dac(monkeypatch, ctrl, [InvalidState("Channel is closed"), b"dac"])
+    assert await ctrl._resolve_node_device_id(_dac_node()) is not None
+    assert len(calls) == 2
+
+
+async def test_a_node_with_no_identity_at_all_is_refused(controller, monkeypatch):
+    ctrl, _ = controller
+    calls = _serve_dac(monkeypatch, ctrl, [InvalidState("Channel is closed")])
+    node = _dac_node()
+    assert await ctrl._resolve_node_device_id(node) is None
+    assert len(calls) == 2
+    with pytest.raises(MatterUnexpectedError):
+        await ctrl._fill_draft(None, None, node)  # type: ignore[arg-type]

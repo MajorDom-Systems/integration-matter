@@ -1,5 +1,6 @@
 import base64
 import enum
+import hashlib
 import inspect
 import logging
 from collections.abc import Callable
@@ -67,8 +68,8 @@ def _to_wire(raw: Any, scale: float | None) -> Any:
 class MatterMapper:
     def __init__(
         self,
-        device_uuid: Callable[[str], UUID],
-        parameter_uuid: Callable[[UUID, str], UUID],
+        device_uuid: Callable[[str | bytes], UUID],
+        parameter_uuid: Callable[[UUID, str | bytes], UUID],
     ):
         # The controller's framework UUID generators (see AbstractController). Every Matter id —
         # a device from its node/product, a discovery from its commissioning identity, a parameter
@@ -87,19 +88,31 @@ class MatterMapper:
         """UUID for a discovery, keyed on its (pre-commissioning) Matter identity string."""
         return self._device_uuid(matter_id)
 
-    def device_uuid(self, node_id: int, product_name: str | None) -> UUID:
-        return self._device_uuid(f"{node_id}_{product_name}")
+    def device_uuid(
+        self, vendor_id: int | None, product_id: int | None, serial_number: str | None, unique_id: str | None
+    ) -> UUID | None:
+        """Keyed on SerialNumber, else UniqueID (both survive a reset on some makers); never the node id.
 
-    def attribute_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
-        return self._parameter_uuid(device_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
+        None when the node reports neither. Vendor and product ids keep serials of different makers apart.
+        """
+        if not (stable := (serial_number or "").strip() or (unique_id or "").strip()):
+            return None
+        return self._device_uuid(f"{vendor_id or 0:04x}/{product_id or 0:04x}/{stable}")
 
-    def command_parameter_uuid(self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
-        return self._parameter_uuid(device_id, f"command_{endpoint_id}/{cluster_id}/{command_id}")
+    def dac_uuid(self, dac_der: bytes) -> UUID:
+        """Last identity fallback: the Device Attestation Certificate is unique per unit: no vendor/product prefix."""
+        return self._device_uuid(hashlib.sha256(dac_der).digest())
+
+    def attribute_parameter_uuid(self, physical_id: UUID, endpoint_id: int, cluster_id: int, attribute_id: int) -> UUID:
+        return self._parameter_uuid(physical_id, f"attribute_{endpoint_id}/{cluster_id}/{attribute_id}")
+
+    def command_parameter_uuid(self, physical_id: UUID, endpoint_id: int, cluster_id: int, command_id: int) -> UUID:
+        return self._parameter_uuid(physical_id, f"command_{endpoint_id}/{cluster_id}/{command_id}")
 
     def command_field_uuid(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_name: str
+        self, physical_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, field_name: str
     ) -> UUID:
-        return self._parameter_uuid(device_id, f"field_{endpoint_id}/{cluster_id}/{command_id}/{field_name}")
+        return self._parameter_uuid(physical_id, f"field_{endpoint_id}/{cluster_id}/{command_id}/{field_name}")
 
     def define_credentials_options(
         self,
@@ -302,14 +315,14 @@ class MatterMapper:
         return result
 
     def arguments_by_name(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, cmd_class: type, arguments: dict
+        self, physical_id: UUID, endpoint_id: int, cluster_id: int, command_id: int, cmd_class: type, arguments: dict
     ) -> dict:
         """A struct value is keyed by sub-parameter id (see parse_commands' `fields`), while
         `default_arguments` are keyed by field name — accept both, keyed by name."""
         if not is_dataclass(cmd_class):
             raise TypeError(f"Expected a dataclass cluster-command class, got {cmd_class!r}")
         names = {
-            str(self.command_field_uuid(device_id, endpoint_id, cluster_id, command_id, f.name)): f.name
+            str(self.command_field_uuid(physical_id, endpoint_id, cluster_id, command_id, f.name)): f.name
             for f in fields(cmd_class)
         }
         return {names.get(str(key), key): value for key, value in arguments.items()}
@@ -337,7 +350,7 @@ class MatterMapper:
     # -------------------------------------------------------------------------
 
     def parse_commands(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, node: MatterNode
+        self, physical_id: UUID, endpoint_id: int, cluster_id: int, cluster, node: MatterNode
     ) -> list[MatterParameter]:
         params = []
         on_system_cluster = cluster_id in SYSTEM_CLUSTERS
@@ -408,7 +421,7 @@ class MatterMapper:
 
                     args.append(
                         Parameter(
-                            id=self.command_field_uuid(device_id, endpoint_id, cluster_id, command_id, field.name),
+                            id=self.command_field_uuid(physical_id, endpoint_id, cluster_id, command_id, field.name),
                             name=field.name,
                             data_type=data_type,
                             min_step=scaled.scale if scaled else None,
@@ -422,7 +435,7 @@ class MatterMapper:
 
             params.append(
                 MatterParameter(
-                    id=self.command_parameter_uuid(device_id, endpoint_id, cluster_id, command_id),
+                    id=self.command_parameter_uuid(physical_id, endpoint_id, cluster_id, command_id),
                     name=name,
                     data_type=ParameterDataType.struct if args else ParameterDataType.none,
                     role=ParameterRole.control,
@@ -440,7 +453,7 @@ class MatterMapper:
         return params
 
     def parse_attributes(
-        self, device_id: UUID, endpoint_id: int, cluster_id: int, cluster, endpoint, node: MatterNode
+        self, physical_id: UUID, endpoint_id: int, cluster_id: int, cluster, endpoint, node: MatterNode
     ) -> list[MatterParameter]:
         params = []
 
@@ -529,7 +542,7 @@ class MatterMapper:
 
             params.append(
                 MatterParameter(
-                    id=self.attribute_parameter_uuid(device_id, endpoint_id, cluster_id, attribute_id),
+                    id=self.attribute_parameter_uuid(physical_id, endpoint_id, cluster_id, attribute_id),
                     name=name,
                     data_type=data_type,
                     visibility=visibility,

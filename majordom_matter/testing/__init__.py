@@ -22,20 +22,39 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
+from majordom_integration_sdk.schemas.device import Discovery
 from matter_server.client.exceptions import CannotConnect, InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.errors import NodeNotExists
 from matter_server.common.helpers.util import dataclass_from_dict
 from matter_server.common.models import CommissionableNodeData, EventType, MatterNodeData
 
+from majordom_matter.model import MatterDeviceState
+
 _FIXTURE = Path(__file__).parent / "fixtures" / "on_off_light_node.json"
 
 
-def load_on_off_light_node() -> MatterNode:
+def draft_for(discovery: Discovery) -> MatterDeviceState:
+    """The draft the Hub hands `pair_device`: a fresh id, the discovery id as physical id, the rest the user's form."""
+    return MatterDeviceState(
+        id=uuid4(),
+        physical_id=discovery.id,
+        name="Test",
+        room_id=UUID(int=1),
+        transport=discovery.transport,
+        integration=discovery.integration,
+        manufacturer=None,
+        parameters=[],
+    )
+
+
+def load_on_off_light_node(attributes: dict[str, Any] | None = None) -> MatterNode:
     """A real `MatterNode` for a captured MVD on-off-light — the same construction the live
     client applies to node data received over the websocket."""
     data = json.loads(_FIXTURE.read_text())
+    data["attributes"].update(attributes or {})
     return MatterNode(dataclass_from_dict(MatterNodeData, data))
 
 

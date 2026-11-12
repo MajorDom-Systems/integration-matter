@@ -917,7 +917,9 @@ async def test_a_reconnect_that_breaks_reports_matter_crashed(controller):
     await _commission(ctrl)
 
     class Locked(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, *, physical_id: UUID):
+        async def controller_did_lose_device(
+            self, controller: AbstractController, *, physical_id: UUID | None = None, device_id: UUID | None = None
+        ):
             raise RuntimeError("database is locked")  # the Hub's
 
     output = ctrl.output = Locked()
@@ -956,7 +958,9 @@ async def test_a_pairing_landing_while_matter_reports_its_losses_leaves_it_recon
     is_reporting = asyncio.Event()
 
     class Slow(RecordingControllerOutput):
-        async def controller_did_lose_device(self, controller: AbstractController, *, physical_id: UUID):
+        async def controller_did_lose_device(
+            self, controller: AbstractController, *, physical_id: UUID | None = None, device_id: UUID | None = None
+        ):
             is_reporting.set()
             await asyncio.sleep(0.1)  # the Hub's write and send
 

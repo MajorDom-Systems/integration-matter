@@ -20,9 +20,9 @@ from aiohttp import ClientSession
 from majordom_integration_sdk import Endpoint, Peripherals, Platform
 from majordom_integration_sdk.repository import DeviceRepositoryMemory
 from majordom_integration_sdk.testing import RecordingControllerOutput
-from matter_server.client import MatterClient
 
 from majordom_matter import MatterController
+from majordom_matter.client import MatterClient
 
 # The matter-server the tests run against.
 matter_server_url = os.environ.get("MATTER_SERVER_URL", "ws://localhost:5580")  # the base URL: /ws, /ble

@@ -21,8 +21,8 @@ def matterjs_server() -> Service:
         ],
         ports={"api": 5580},
         compose={
-            # :dev pinned by digest (2026-11-13; the 2026-10-08 one had no server in it); bump on purpose
-            "image": "ghcr.io/matter-js/matterjs-server@sha256:3c4779a606d49d8ad5a628b448057812e1a450e90faf30f7e2b2c287d4758e30",  # noqa: E501
+            # :dev pinned by digest (2026-10-08); bump on purpose
+            "image": "ghcr.io/matter-js/matterjs-server@sha256:bcaacf6b2b2df9ce2b929ad7469d5380a4d627f05f790e201d127e8b65af5b0e",  # noqa: E501
             "network_mode": "host",
             "userns_mode": "host",
             "user": "{host.uid}:{host.gid}",  # its data folder belongs to the hub

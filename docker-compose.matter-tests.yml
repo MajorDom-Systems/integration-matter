@@ -1,4 +1,4 @@
-# Matter integration test stack: python-matter-server + a container that runs the
+# Matter integration test stack: matterjs-server (the image the integration ships) + a container that runs the
 # integration's virtual-device suite against real MVD `chef` binaries.
 #
 # Run:  docker compose -f docker-compose.matter-tests.yml up --build \
@@ -6,7 +6,9 @@
 # On Apple Silicon add the mac override (Rosetta):  -f docker-compose.matter-tests.mac.yml
 services:
   matter-server:
-    image: ghcr.io/matter-js/python-matter-server:stable
+    # same digest as majordom_matter/config.py; bump both together
+    image: ghcr.io/matter-js/matterjs-server@sha256:3c4779a606d49d8ad5a628b448057812e1a450e90faf30f7e2b2c287d4758e30
+    user: "0:0"  # the image's own uid 1000 can't write the bind-mounted ./matter_data
     restart: unless-stopped
     privileged: true
     sysctls:
@@ -14,7 +16,8 @@ services:
       - net.ipv6.conf.all.forwarding=1
     volumes:
       - ./matter_data:/data
-    command: --storage-path /data --paa-root-cert-dir /data/credentials --primary-interface eth0
+    # the MVD chef devices carry test attestation: test-net DCL plus the PAA certs fetched into ./matter_data/credentials
+    command: --storage-path /data --certificates-dir /data/credentials --enable-test-net-dcl --primary-interface eth0
     networks: [matter-net]
 
   matter-integration-tests:

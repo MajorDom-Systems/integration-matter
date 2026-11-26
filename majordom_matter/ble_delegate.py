@@ -160,7 +160,9 @@ class MatterServerBLEDelegate:
                 lease = await stack.enter_async_context(
                     self._ble.exclusive(address, owner="matter", busy_timeout=timeout / 1000)
                 )
-                connection = await asyncio.wait_for(lease.connect(lambda: self._lost(handle)), timeout / 1000)
+                connection = await asyncio.wait_for(
+                    lease.open_connection(lambda: self._lost(handle), max_duration=None), timeout / 1000
+                )  # matter.js closes it: no cap on how long it stays open
             except TimeoutError as e:
                 raise _Failure("timeout") from e
             except ConnectionError as e:  # incl. BLEBusyError: every source that hears the device is leased

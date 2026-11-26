@@ -1345,17 +1345,19 @@ dev = ["Sphinx (>=5.0.2)", "doc8 (>=0.11.2)", "pytest (>=7.0.1)", "pytest-xdist 
 
 [[package]]
 name = "majordom-integration-sdk"
-version = "0.4.0"
+version = "0.5.0"
 description = "Models, protocols, tooling and the runtime for building and running MajorDom integrations."
 optional = false
-python-versions = ">=3.13,<4.0"
+python-versions = "<4.0,>=3.13"
 groups = ["main", "dev"]
-files = []
-develop = false
+files = [
+    {file = "majordom_integration_sdk-0.5.0-py3-none-any.whl", hash = "sha256:017769e163f3d7830007892b9db2f703669bc89a2cfd0b38d073f47397c39fff"},
+    {file = "majordom_integration_sdk-0.5.0.tar.gz", hash = "sha256:a43afdd36861b4ce0cc4b6127286c4cadaa71a511cf65df7bf2d82b8fdb08053"},
+]
 
 [package.dependencies]
-bleak = {version = ">=3.1.0", optional = true}
-dbus-fast = {version = ">=5.2.0", optional = true, markers = "sys_platform == \"linux\""}
+bleak = {version = ">=3.1.0", optional = true, markers = "extra == \"ble\""}
+dbus-fast = {version = ">=5.2.0", optional = true, markers = "sys_platform == \"linux\" and extra == \"ble\""}
 pydantic = ">=2.14.3,<3.0"
 python-slugify = "*"
 
@@ -1365,12 +1367,6 @@ cli = ["rich (>=13)", "typer-shell (>=0.2)"]
 discovery = ["zeroconf (>=0.154.0)"]
 runtime = ["cryptography (>=46)", "pyserial (>=3.5)"]
 silabs = ["universal-silabs-flasher (>=1.3.0)"]
-
-[package.source]
-type = "git"
-url = "https://github.com/MajorDom-Systems/integration-sdk.git"
-reference = "develop"
-resolved_reference = "40c3397b319aa73c71cd7b393012f80703d1bac3"
 
 [[package]]
 name = "markdown-it-py"
@@ -3681,4 +3677,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "1b218c8d25f85bafa0146c857fefb1dcc62dde614d98e1ca66c9fecdac3ad01e"
+content-hash = "d2aafc950144c721445fa200c397357477f38aecc291627474021c31b27c2d37"

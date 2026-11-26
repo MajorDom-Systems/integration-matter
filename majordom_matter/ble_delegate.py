@@ -158,7 +158,7 @@ class MatterServerBLEDelegate:
         async with contextlib.AsyncExitStack() as stack:  # closed here on failure, kept for the connection otherwise
             try:
                 lease = await stack.enter_async_context(
-                    self._ble.exclusive(address, owner="matter", timeout=timeout / 1000)
+                    self._ble.exclusive(address, owner="matter", busy_timeout=timeout / 1000)
                 )
                 connection = await asyncio.wait_for(lease.connect(lambda: self._lost(handle)), timeout / 1000)
             except TimeoutError as e:
